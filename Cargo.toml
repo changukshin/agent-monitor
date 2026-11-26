@@ -1,6 +1,7 @@
 [package]
 name = "agent-monitor-spike"
 version = "0.1.0"
+default-run = "agent-monitor-spike"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT"
