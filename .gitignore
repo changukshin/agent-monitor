@@ -1,6 +1,7 @@
-node_modules/
 .env
 .env.local
 coverage/
 *.log
 .agent-monitor/
+
+/target/

@@ -1,0 +1,31 @@
+name: Rust spike CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust stable
+        run: rustup update stable
+      - name: Test
+        run: cargo +stable test --all-targets
+      - name: Release build
+        run: cargo +stable build --release
+      - name: Upload release binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-monitor-spike-${{ matrix.os }}
+          path: |
+            target/release/agent-monitor-spike
+            target/release/agent-monitor-spike.exe
+          if-no-files-found: error
+          retention-days: 7
