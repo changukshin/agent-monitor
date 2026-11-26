@@ -76,11 +76,11 @@ Keep the model small: one current session record, a status, confidence, last obs
 
 ## 4. Single-collector transport
 
-Prefer one Windows-hosted collector bound to loopback (default http://127.0.0.1:8787). Native Windows hooks can send directly; WSL2 hooks should first evaluate a Windows-side helper invoked through WSL interoperability, with the sanitized event passed via stdin rather than shell interpolation or command-line secrets. This is a candidate, not a mandatory implementation.
+Prefer one Windows-hosted collector bound to loopback (default http://127.0.0.1:8787). Native Windows hooks can send directly; WSL2 hooks should first evaluate a Windows-side Rust helper invoked through WSL interoperability, with the sanitized event passed via stdin rather than shell interpolation or command-line secrets. This is a candidate, not a mandatory implementation.
 
 | Environment | Required investigation |
 | --- | --- |
-| Windows native | Direct loopback ingest and browser access |
+| Windows native | Direct loopback ingest and local dashboard access |
 | WSL2 NAT | Verified local path to the same collector, preferably interop |
 | WSL2 mirrored networking | Verified local path to the same collector; direct loopback or interop if appropriate |
 | WSL2 with interop disabled or unavailable | Document limitation or validate an equally safe alternative |
@@ -102,32 +102,31 @@ Monitoring is observational only. It must not change tool authorization, prompt 
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | / | Dashboard |
 | GET | /api/sessions | Current snapshot |
 | GET | /api/events | SSE snapshot and updates |
 | POST | /api/ingest | Authenticated normalized evidence |
 | GET | /healthz | Minimal collector health |
 
-- Bind only to the verified local loopback endpoint. Restrict Host to explicit local host/port values; reject foreign origins on all routes, including read and SSE routes. Allow same-origin browser requests and native local requests without an Origin header where appropriate. Do not enable cross-origin reads or wildcard CORS. Protect metadata from DNS rebinding and cross-site access; use appropriate same-origin response headers. This is a single-trusted-local-user design, not isolation from malicious processes running as that user.
-- Authenticate ingest with a cryptographically random per-installation token passed in an authorization header. Store it outside the repository in a user-private configuration file with restrictive Windows ACLs or Unix permissions as appropriate. Document creation, access from both environments, rotation and revocation. Never include the token in URLs, hook configuration command lines, event bodies, browser UI, or logs. Rotation invalidates the previous token; no login, OAuth or JWT service is needed.
+- Bind only to the verified local loopback endpoint. Restrict Host to explicit local host/port values; reject foreign origins on all routes, including read and SSE routes. Allow native local requests without an Origin header where appropriate. Reject browser origins for the native client API unless a separate supported browser integration is explicitly approved. Do not enable cross-origin reads or wildcard CORS. Protect metadata from DNS rebinding and cross-site access; use appropriate same-origin response headers. This is a single-trusted-local-user design, not isolation from malicious processes running as that user.
+- Authenticate ingest with a cryptographically random per-installation token passed in an authorization header. Store it outside the repository in a user-private configuration file with restrictive Windows ACLs or Unix permissions as appropriate. Document creation, access from both environments, rotation and revocation. Never include the token in URLs, hook configuration command lines, event bodies, UI, or logs. Rotation invalidates the previous token; no login, OAuth or JWT service is needed.
 - Validate event schemas, field lengths and request sizes; bound retained records, deduplication metadata, and pending SSE data. Handle slow/disconnected SSE clients without unbounded buffering. Do not expose sensitive diagnostic details in health responses.
 - SSE connections receive a current snapshot on connection/reconnection, with subsequent updates ordered consistently. Reconnecting must not duplicate notifications for old transitions.
 - Render agent metadata as text, not executable HTML. Do not implement command execution, approval, or control endpoints.
 
 ## 7. Dashboard
 
-Open the local dashboard in an existing browser. Show Running, Needs attention and Completed counts for confirmed current records only, plus an explicit uncertain/unknown count or indicator. Show actual approval and input waits separately. Display provider, native/WSL environment, project name, optional user label, status, confidence, last observed time and elapsed time where meaningful. Clearly label stale or provisional evidence and prioritize confirmed attention requests. Use labels and icons as well as color.
+Open a native Rust desktop dashboard on Windows. The collector remains usable without the dashboard. A lightweight native Rust GUI toolkit may be selected during the dashboard phase; no embedded browser or JavaScript is required. Show Running, Needs attention and Completed counts for confirmed current records only, plus an explicit uncertain/unknown count or indicator. Show actual approval and input waits separately. Display provider, native/WSL environment, project name, optional user label, status, confidence, last observed time and elapsed time where meaningful. Clearly label stale or provisional evidence and prioritize confirmed attention requests. Use labels and icons as well as color.
 
-Provide simple filters and opt-in browser notifications only for newly confirmed attention/completion transitions; suppress historical, provisional and duplicate notifications. Document browser background limitations. Window activation, system tray, always-on-top, persistent history and external integrations are deferred.
+Provide simple filters and opt-in native desktop notifications only for newly confirmed attention/completion transitions; suppress historical, provisional and duplicate notifications. Document OS notification limitations. Window activation, system tray, always-on-top, persistent history and external integrations are deferred.
 
 ## 8. Implementation sequence
 
 1. **Feasibility spike:** produce the evidence report and support matrix in section 2. Resolve or explicitly escalate blockers before production implementation.
-2. **Collector and reducer:** Node.js 22+, built-in HTTP and test runner, verified adapters, bounded memory, authenticated local API and SSE.
-3. **Dashboard:** plain HTML/CSS/JavaScript, live updates, confirmed counts and optional browser notifications.
+2. **Collector and reducer:** Rust, Cargo, verified adapters, bounded memory, authenticated local API and SSE or an equally small Rust-native local update stream.
+3. **Dashboard:** native Rust GUI, live updates, confirmed counts and optional desktop notifications.
 4. **Release:** safe hook installation/removal, documented supported versions and environments, CI and end-to-end evidence.
 
-Prefer a small source layout (server, reducer, adapters, public assets, hook scripts and tests). Do not add React, Electron, Docker, a database or additional services absent a demonstrated need. Provide npm start and npm test when the corresponding implementation exists. Use English for documentation, issues, PRs, commits and UI text.
+Prefer a small Rust source layout (probe, transport, server, reducer, adapters, native UI and tests). Use Cargo build and test; keep a single executable with subcommands until a split is justified. Build native release binaries for Windows and Linux/WSL2. No Node.js, npm, JavaScript, React, Electron, Docker, database or additional services are required. Commit the resolved Cargo.lock before release; review dependencies and their licenses. Use English for documentation, issues, PRs, commits and UI text.
 
 ## 9. Release acceptance criteria
 
@@ -136,9 +135,9 @@ Prefer a small source layout (server, reducer, adapters, public assets, hook scr
 - [ ] Supported state transitions match real agent behavior. Stop continuation, automatic permission resolution and rejected prompts cannot generate false confirmed completion, attention or running states; unsupported states are clearly marked.
 - [ ] Duplicate, delayed, reordered and missing evidence, interruption, session end, SSE reconnect and collector restart are tested. Stale records are bounded and expiry does not imply termination.
 - [ ] Hook installation/removal preserves existing behavior and settings, including subsequent user edits and repeated operations. Collector-down, hang, timeout and malformed-event cases pass the non-interference deadline and behavior tests.
-- [ ] No refresh is needed for live updates; target under one second from collector receipt to UI update in normal local operation.
+- [ ] No manual refresh is needed for live updates; target under one second from collector receipt to UI update in normal local operation.
 - [ ] Unauthenticated ingest, invalid/oversized input, disallowed Host and foreign Origin are rejected; cross-origin reads, token rotation, bounded storage and slow SSE clients are covered.
 - [ ] Raw payloads, prompts, responses, commands, tool arguments and credentials are absent from persisted state, event forwarding and logs. Token file protections are verified.
 - [ ] Separate automated, simulated and real CLI/OS results. Document unsupported versions/modes, notification limitations, installation and removal instructions in English before release.
 
-The next PR should be a small feasibility spike, not the complete application. Do not modify unrelated repositories, change agent approval policies, or claim unverified platform support.
+Phase 1 is a small feasibility spike, not the complete application. Rust replaces the original Node.js experiment; repeat the feasibility measurements on the Rust binary rather than treating the old results as evidence for it. Do not modify unrelated repositories, change agent approval policies, or claim unverified platform support.
