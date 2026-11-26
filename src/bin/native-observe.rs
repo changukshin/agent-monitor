@@ -1,7 +1,11 @@
 use serde_json::{json, Value};
 use std::{
-    env, io::{ BufRead, BufReader, Read, Write}, path::Path,
-    process::{ChildStdin, ChildStdout, Command, Stdio}, sync::mpsc, thread,
+    env,
+    io::{BufRead, BufReader, Read, Write},
+    path::Path,
+    process::{ChildStdin, ChildStdout, Command, Stdio},
+    sync::mpsc,
+    thread,
     time::{Duration, Instant},
 };
 
@@ -10,30 +14,48 @@ type Result<T> = std::result::Result<T, &'static str>;
 
 fn session_id(value: &Value) -> Result<&str> {
     let id = value.as_str().ok_or("invalid_id")?;
-    let valid = id.len() == 36 && id.bytes().enumerate().all(|(i, b)| {
-        if [8, 13, 18, 23].contains(&i) { b == b'-' } else { b.is_ascii_hexdigit() }
-    });
-    if valid { Ok(id) } else { Err("invalid_id") }
+    let valid = id.len() == 36
+        && id.bytes().enumerate().all(|(i, b)| {
+            if [8, 13, 18, 23].contains(&i) {
+                b == b'-'
+            } else {
+                b.is_ascii_hexdigit()
+            }
+        });
+    if valid {
+        Ok(id)
+    } else {
+        Err("invalid_id")
+    }
 }
 
 fn label<'a>(value: &'a Value, allowed: &[&str]) -> &'a str {
-    value.as_str().filter(|v| allowed.contains(v)).unwrap_or("unknown")
+    value
+        .as_str()
+        .filter(|v| allowed.contains(v))
+        .unwrap_or("unknown")
 }
 
 fn snapshot(provider: &str, rows: &Value, cwd: &Path) -> Result<Value> {
     let mut observations = Vec::new();
     for row in rows.as_array().ok_or("invalid_list")? {
         let path = row["cwd"].as_str().ok_or("missing_cwd")?;
-        if Path::new(path) != cwd { continue; }
+        if Path::new(path) != cwd {
+            continue;
+        }
         let record = if provider == "claude" {
             json!({"sessionId":session_id(&row["sessionId"])?,
                 "kind":label(&row["kind"], &["interactive","background"]),
                 "status":label(&row["status"], &["idle","busy","waiting"]),
-                "state":label(&row["state"], &["working","idle","waiting","completed","failed","stopped"])})
+                "state":label(&row["state"], &["working","idle","waiting","blocked","completed","failed","stopped"])})
         } else {
             let status = &row["status"];
-            let flags: Vec<_> = status["activeFlags"].as_array().into_iter().flatten()
-                .map(|v| label(v, &["waitingOnApproval","waitingOnUserInput"])).collect();
+            let flags: Vec<_> = status["activeFlags"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|v| label(v, &["waitingOnApproval", "waitingOnUserInput"]))
+                .collect();
             json!({"sessionId":session_id(&row["id"])?,
                 "status":label(&status["type"], &["notLoaded","idle","active","systemError"]),
                 "flags":flags})
@@ -46,9 +68,14 @@ fn snapshot(provider: &str, rows: &Value, cwd: &Path) -> Result<Value> {
 fn response(reader: &mut impl BufRead, id: u8, remaining: &mut usize) -> Result<Value> {
     loop {
         let mut line = Vec::new();
-        let n = reader.by_ref().take(*remaining as u64 + 1).read_until(b'\n', &mut line)
+        let n = reader
+            .by_ref()
+            .take(*remaining as u64 + 1)
+            .read_until(b'\n', &mut line)
             .map_err(|_| "read_error")?;
-        if n == 0 { return Err("unavailable"); }
+        if n == 0 {
+            return Err("unavailable");
+        }
         *remaining = remaining.checked_sub(n).ok_or("output_limit")?;
         let message: Value = serde_json::from_slice(&line).map_err(|_| "invalid_json")?;
         if message.get("method").is_none() && message["id"] == id {
@@ -58,48 +85,85 @@ fn response(reader: &mut impl BufRead, id: u8, remaining: &mut usize) -> Result<
 }
 
 fn send(pipe: &mut ChildStdin, message: Value) -> Result<()> {
-    writeln!(pipe, "{message}").and_then(|_| pipe.flush()).map_err(|_| "unavailable")
+    writeln!(pipe, "{message}")
+        .and_then(|_| pipe.flush())
+        .map_err(|_| "unavailable")
 }
 
-fn inspect(provider: &str, mut input: ChildStdin, output: ChildStdout, cwd: &Path) -> Result<Value> {
+fn inspect(
+    provider: &str,
+    mut input: ChildStdin,
+    output: ChildStdout,
+    cwd: &Path,
+) -> Result<Value> {
     if provider == "claude" {
         drop(input);
         let mut data = Vec::new();
-        output.take(LIMIT as u64 + 1).read_to_end(&mut data).map_err(|_| "read_error")?;
-        if data.len() > LIMIT { return Err("output_limit"); }
-        return snapshot(provider, &serde_json::from_slice(&data).map_err(|_| "invalid_json")?, cwd);
+        output
+            .take(LIMIT as u64 + 1)
+            .read_to_end(&mut data)
+            .map_err(|_| "read_error")?;
+        if data.len() > LIMIT {
+            return Err("output_limit");
+        }
+        return snapshot(
+            provider,
+            &serde_json::from_slice(&data).map_err(|_| "invalid_json")?,
+            cwd,
+        );
     }
     let mut reader = BufReader::new(output);
     let mut remaining = LIMIT;
-    send(&mut input, json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"observation-spike","version":"0.1"}}}))?;
+    send(
+        &mut input,
+        json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"observation-spike","version":"0.1"}}}),
+    )?;
     response(&mut reader, 1, &mut remaining)?;
     send(&mut input, json!({"method":"initialized"}))?;
-    send(&mut input, json!({"id":2,"method":"thread/list","params":{"cwd":cwd,"limit":32,"useStateDbOnly":true}}))?;
+    send(
+        &mut input,
+        json!({"id":2,"method":"thread/list","params":{"cwd":cwd,"limit":32,"useStateDbOnly":true}}),
+    )?;
     let result = response(&mut reader, 2, &mut remaining)?;
-    if !result["nextCursor"].is_null() { return Err("page_limit"); }
+    if !result["nextCursor"].is_null() {
+        return Err("page_limit");
+    }
     snapshot(provider, &result["data"], cwd)
 }
 
 fn run() -> Result<Value> {
     let args: Vec<_> = env::args().skip(1).collect();
-    let [provider, binary, directory] = args.as_slice() else { return Err("usage"); };
-    if !Path::new(binary).is_absolute() || !Path::new(directory).is_absolute() { return Err("absolute_path_required"); }
+    let [provider, binary, directory] = args.as_slice() else {
+        return Err("usage");
+    };
+    if !Path::new(binary).is_absolute() || !Path::new(directory).is_absolute() {
+        return Err("absolute_path_required");
+    }
     let args: Vec<&str> = match provider.as_str() {
-        "claude" => vec!["agents","--json","--all","--cwd",directory],
-        "codex" => vec!["app-server","proxy"],
+        "claude" => vec!["agents", "--json", "--all", "--cwd", directory],
+        "codex" => vec!["app-server", "proxy"],
         _ => return Err("usage"),
     };
     let listing = provider == "claude";
     let deadline = Instant::now() + Duration::from_secs(5);
-    let mut child = Command::new(binary).args(args).stdin(Stdio::piped()).stdout(Stdio::piped())
-        .stderr(Stdio::null()).spawn().map_err(|_| "unavailable")?;
+    let mut child = Command::new(binary)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| "unavailable")?;
     let input = child.stdin.take().unwrap();
     let output = child.stdout.take().unwrap();
     let provider = provider.clone();
     let directory = directory.clone();
     let (tx, rx) = mpsc::channel();
-    thread::spawn(move || { let _ = tx.send(inspect(&provider,input,output,Path::new(&directory))); });
-    let result = rx.recv_timeout(deadline.saturating_duration_since(Instant::now())).unwrap_or(Err("timeout"));
+    thread::spawn(move || {
+        let _ = tx.send(inspect(&provider, input, output, Path::new(&directory)));
+    });
+    let result = rx
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .unwrap_or(Err("timeout"));
     // Claude's listing must exit successfully. The Codex proxy is a persistent
     // connection: close our client once the correlated list response arrives.
     if listing && result.is_ok() {
@@ -113,14 +177,19 @@ fn run() -> Result<Value> {
     }
     let _ = child.kill();
     let _ = child.wait();
-    if listing && result.is_ok() { return Err("timeout"); }
+    if listing && result.is_ok() {
+        return Err("timeout");
+    }
     result
 }
 
 fn main() {
     match run() {
         Ok(value) => println!("{value}"),
-        Err(reason) => { eprintln!("{reason}"); std::process::exit(1); }
+        Err(reason) => {
+            eprintln!("{reason}");
+            std::process::exit(1);
+        }
     }
 }
 
@@ -131,15 +200,30 @@ mod tests {
     fn listing_drops_private_fields_and_preserves_unknowns() {
         let rows = json!([{"cwd":"/trial","kind":"interactive","sessionId":"aaaaaaaa-1234-1234-abcd-111111111111",
             "name":"private","status":"private"},{"cwd":"/elsewhere","name":"private"}]);
-        let result = snapshot("claude",&rows,Path::new("/trial")).unwrap();
+        let result = snapshot("claude", &rows, Path::new("/trial")).unwrap();
         assert_eq!(result["sessions"][0]["status"], "unknown");
         assert_eq!(result["sessions"].as_array().unwrap().len(), 1);
         assert!(!result.to_string().contains("private"));
     }
     #[test]
+    fn samples_keep_provider_facts_separate_from_turn_outcome() {
+        let id = "aaaaaaaa-1234-1234-abcd-111111111111";
+        let rows = json!([{"cwd":"/trial","id":id,"preview":"private",
+            "status":{"type":"active","activeFlags":["waitingOnUserInput","private"]}}]);
+        let sample = snapshot("codex", &rows, Path::new("/trial")).unwrap();
+        assert_eq!(sample["sessions"][0]["flags"], json!(["waitingOnUserInput", "unknown"]));
+        assert!(!sample.to_string().contains("private"));
+        let rows = json!([{"cwd":"/trial","sessionId":id,"kind":"background","state":"blocked","status":"idle"}]);
+        let sample = snapshot("claude", &rows, Path::new("/trial")).unwrap();
+        assert_eq!(sample["sessions"][0]["state"], "blocked");
+        assert_eq!(sample["sessions"][0]["status"], "idle");
+    }
+
+    #[test]
     fn rpc_requires_matching_response_within_budget() {
         let data = b"{\"id\":1,\"method\":\"server/request\"}\n{\"id\":1,\"result\":true}\n";
-        assert_eq!(response(&mut &data[..],1,&mut LIMIT.clone()).unwrap(), true);
-        assert_eq!(response(&mut &data[..],1,&mut 4), Err("output_limit"));
+        let mut remaining = LIMIT;
+        assert_eq!(response(&mut &data[..], 1, &mut remaining).unwrap(), true);
+        assert_eq!(response(&mut &data[..], 1, &mut 4), Err("output_limit"));
     }
 }

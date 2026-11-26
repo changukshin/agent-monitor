@@ -160,3 +160,54 @@ Claude ran two successive fresh, nonpersistent processes per condition using exp
 ### Readiness recommendation
 
 **NO-GO for Phase 2.** The discovery issue is explained and successful target-PC delivery is reproducible. Codex Stop can precede further work. The owning-server input flag resolved correctly but cross-process access to equivalent live Codex state is unproven. Ordinary approval waits and their resolution remain unvalidated under the existing policy. Successful Claude turns require account credit. Provider-facing handler latency exceeded 500 ms, and one offline hook failed at its provider timeout even though the turn completed. Retain the 350 ms watchdog and the 500 ms target. No Rust change is justified by the pre-launch trust failure. Revisit readiness with live approval evidence, independently readable attention/completion state and repeatable latency within target, or a separate maintainer decision revising scope.
+
+## Phase 1B — provider-native observation
+
+**Recommendation: NO-GO. Maintainer decision pending (#3).** An external process discovered ordinary Windows Claude sessions. Actual human attention and final turn outcome remain unconfirmed for both providers through the tested passive paths.
+
+### Repeat the experiment
+
+Build with `cargo build --release --bin native-observe` or use the release artifact for the host OS. Run once per sample:
+
+    native-observe claude <absolute-claude-executable> <absolute-session-cwd>
+    native-observe codex <absolute-native-codex-executable> <absolute-session-cwd>
+
+Supply the provider's cwd spelling. Keep returned UUIDs local. Each invocation emits one scoped JSON snapshot or a static error and nonzero exit. Repeat to reconnect. Only one sample need be outstanding. The client caps input at 1 MiB and applies a five-second budget; process creation and cleanup can add wall time. A paginated Codex result beyond 32 threads is rejected as incomplete.
+
+Claude uses `agents --json --all --cwd` and checks cwd again before emitting allowlisted metadata. Codex launches only the existing control socket's stdio proxy, initializes it and requests a scoped metadata-only thread list. It does not request turns/items, start threads, answer requests or start a daemon.
+
+### Target-PC trials, November 26, 2026
+
+Windows build 26300, Claude Code 2.1.287, Codex CLI 0.167.0, WSL 2.7.12.0, Ubuntu 24.04.4 LTS, NAT. Two ordinary interactive Claude launches used separate already-trusted directories. A third disposable session used Claude's standard background option. The initial listing was empty. Two successive independent Rust samples across the two directories returned three distinct stable UUIDs. Agent processes continued between observer invocations. Trust and approval settings were preserved.
+
+| Scenario | External Claude observation | External Codex observation |
+| --- | --- | --- |
+| Discovery / correlation | CONFIRMED for two interactive sessions and one background session on Windows. | UNTESTED on a reachable owner. The default daemon version check reported connection refused; the native proxy sample returned unavailable. |
+| Active work / second turn | CONFIRMED for the busy flag. While one interactive session retried a request, the other stayed idle. A second prompt made the first busy again. | UNTESTED on a shared owner. |
+| Human input / approval pending and resolved | UNTESTED. Background state blocked did not identify the reason or a request. No approval was answered. | UNSUPPORTED on the tested ordinary path. Phase 1A's input wait and resolution were visible only on the owning test server; approval remained untested. |
+| Successful completion / continued Stop | UNSUPPORTED by the tested listing fields. After a visible API connection failure the interactive session returned to idle. | UNSUPPORTED on the tested path. Phase 1A observed Stop before continuation. |
+| Failure / recovery | PROVISIONAL_ONLY. The ordinary interactive client exhausted retries with connection refused. Isolated print mode separately reported insufficient credit. Neither identifies a monitor defect. Successful tool recovery was untested in these Claude trials. | UNTESTED externally. The Phase 1A owning-client recovery is not external evidence. |
+| Interruption / exit | PROVISIONAL_ONLY. Escape during the second turn was followed by idle. Stopping the owned background trial yielded state stopped. Neither sample carried a terminal turn status. | UNTESTED externally. Phase 1A's Interrupt hook covered explicit cancellation only. |
+| Reconnect / loss | CONFIRMED for resampling the same three identities. Unavailable or missing observations remain unknown. | An independent server previously reported notLoaded. Neither it nor a failed proxy connection establishes ownership. |
+
+Sanitized projections use stable aliases in place of UUIDs. The blocked value came from the raw provider listing; the first Rust artifact mapped it to unknown, and the final allowlist preserves it.
+
+    A interactive idle
+    B interactive idle
+    A interactive busy     B interactive idle
+    C background  busy     state=working
+    A interactive idle     UI reported connection refused
+    C background  idle     state=blocked
+    C background  unknown  state=stopped
+
+Windows release-binary invocations for the two cwds took 2,250 and 2,211 ms. This external sampling cost constrains refresh frequency. No synchronous hook is added by either snapshot adapter. WSL interop successfully invoked the Windows observer against Windows Claude. The Linux artifact rejected an absent provider and timed out against a stalled disposable listing process in 5,647 ms including wsl.exe startup. WSL exposed a Windows npm shim for Codex which failed under Linux. No live native WSL provider pair was demonstrated. Phase 1A's NAT receipt remains transport-only evidence.
+
+### Async discovery and non-interference
+
+Claude 2.1.287 executed a Rust UserPromptSubmit command hook in synchronous and asynchronous modes using invocation-local settings. Baseline / sync / async print processes took 5,221 / 5,111 / 4,494 ms, one sample per condition. Each exited with the same external credit error. Both traces reached event validation and the intentionally missing token. The probe produced no context or decision. These whole-process measurements do not isolate async dispatch latency or establish the 500 ms target. Phase 1A exceeded that target even with a healthy receiver.
+
+Codex documents async PostToolUse command handlers and synchronous SessionEnd. The installed hook schema exposed an async field. No newly trusted async command was installed or executed on Codex. Async delivery remains a supplemental discovery candidate. References: [Codex app server](https://developers.openai.com/codex/app-server), [Codex hooks](https://developers.openai.com/codex/hooks), [Claude CLI reference](https://code.claude.com/docs/en/cli-reference), [Claude hooks](https://code.claude.com/docs/en/hooks).
+
+### Decision requested
+
+Keep Phase 2 blocked. A narrower Windows Claude inventory could expose busy/idle while keeping human attention and final outcome unknown. Alternatively, investigate an explicitly opt-in Codex owning-server launch integration in a separately approved experiment. Neither scope has maintainer approval here. Ordinary passive Codex access, native WSL providers, request correlation, successful Claude outcomes and the 500 ms hook target remain open.
