@@ -1,113 +1,144 @@
-# Agent Monitor — MVP implementation brief
+# Agent Monitor — MVP specification
 
-상태: Draft · 2026-11-26
+Status: Draft. This document defines the intended v0.1 scope and acceptance criteria, not verified implementation capabilities.
 
-## 1. Goal
+## 1. Goal and scope
 
-기존 Codex CLI 및 Claude Code 실행 방식을 유지한 채 여러 작업을 한 화면에서 관찰한다. 특정 프로젝트(NF95 등)와 무관하게 사용할 수 있어야 한다. MVP는 로컬 단일 사용자용이며 멀티 호스트, 원격 제어 및 복잡한 업무 자동화를 포함하지 않는다.
+Observe multiple existing Codex CLI and Claude Code sessions in a single local dashboard without changing how users launch or interact with their agents. Target a single Windows user with native Windows and WSL2 sessions. No orchestration, remote access, multi-host synchronization, dedicated hardware, database, or persistent session history is required.
 
-## 2. User experience
+The smallest useful release must reliably show progress, human attention, and turn completion for the supported provider versions and environments. Unsupported states must be explicitly identified. If the essential states cannot be observed reliably, stop and propose a scope revision rather than claiming support or inventing an inference engine.
 
-- 브라우저에서 `http://127.0.0.1:8787` (기본값, 설정 변경 가능)을 열면 전체 세션을 확인한다.
-- 상단에 실행 중 / 응답 필요 / 완료 수를 표시한다. 승인 대기와 입력 대기는 응답 필요로 집계하되 카드에서 구분한다.
-- 카드에는 에이전트, 프로젝트명(작업 폴더명), 선택적 작업 라벨, 현재 상태, 마지막 상태 변경 시각, 경과 시간을 표시한다.
-- 대기 세션을 먼저 정렬하며 에이전트, 프로젝트, 상태 필터를 제공한다.
-- 종료된 세션은 기본 목록에서 숨기고 최근 기록으로 확인한다. 색상 외에 텍스트와 아이콘으로 상태를 표시한다.
-- 완료/대기 알림은 사용자가 명시적으로 활성화한 경우에만 발송한다. 브라우저 알림의 백그라운드 동작 한계를 명시한다.
-- 창 이동은 지원 가능한 환경에서만 노출하며 MVP의 필수 안정성 기능과 분리한다. 확인되지 않은 창을 임의로 활성화하지 않는다.
+## 2. Feasibility gate — before production implementation
 
-## 3. Adapter contract
+Complete a small, isolated technical spike before building the production collector or dashboard. Keep experimental code disposable. Record the following in an English evidence report:
 
-우선 Codex CLI, Claude Code 두 종류를 지원한다. 구현 전에 설치된 각 제품 버전의 공식 Hook 문서와 실제 payload를 조사한다. 이벤트 이름, 식별자, 승인/입력 이벤트, 종료 이벤트를 검증한 뒤 지원표를 기록한다. CLI와 Desktop은 동일하다고 가정하지 않는다. Desktop 앱은 검증 전까지 미지원이다.
+- Exact Codex CLI, Claude Code, Windows, WSL distribution and networking-mode versions/configurations tested.
+- Official documentation references and sanitized real event fixtures. Distinguish CLI from desktop applications; desktop support is out of scope.
+- A provider/version support matrix for session start/end, turn start/completion/failure/interruption, actual approval/input pending and resolution, and idle. For each state record evidence, whether it is confirmed, provisional-only or unsupported, and how later events invalidate earlier observations.
+- Compare observed events against the actual agent behavior. Exercise normal completion, a Stop hook that causes continuation, approval requested but resolved without human interaction, blocked prompt submission, tool failure followed by recovery, user input, interruption and session exit where supported. Use isolated test sessions and existing or temporary test hooks; never alter real project approval policies.
+- Validate the single-collector transport in section 4 and demonstrate non-interference under the failure cases in section 5.
+- Record unsupported or untested combinations, rather than treating documentation or simulated fixtures as live proof.
 
-정규화 이벤트 예시(실제 공급자 payload가 아니라 내부 계약):
+Hook names such as Stop, PermissionRequest, UserPromptSubmit and PostToolUse are examples to investigate, not a universal mapping or a promise of availability. A Stop invocation may precede continuation; a permission request may be resolved by another hook; prompt submission may be blocked; tool completion is not turn completion. Use an officially supported read-only observation interface in addition to hooks only if necessary and validated. Do not require users to relaunch agents under a wrapper solely to monitor them.
+
+**Gate:** do not proceed with a full implementation until both target providers have a demonstrated useful observation path and a single local collector can receive events from native Windows and at least one tested WSL2 mode without altering agent behavior. Reliable confirmation of core states (running, actual human attention, completion) is the release goal; gaps in these states require an explicit maintainer decision before narrowing that goal. A mode not tested is not supported by default. No requirement to change a user's networking configuration to pass the gate.
+
+## 3. Observation and state contract
+
+### 3.1 Normalized evidence
+
+The following is an illustrative internal event, not a provider payload or a frozen wire schema:
 
 ```json
 {
   "schemaVersion": 1,
   "eventId": "unique-id",
   "source": "codex",
-  "hostId": "local-wsl",
+  "hostId": "local-wsl-distribution",
   "sessionId": "provider-session-id",
   "turnId": "optional-provider-turn-id",
   "type": "turn.started",
+  "confidence": "confirmed",
   "occurredAt": "2026-11-26T05:00:00.000Z",
-  "cwd": "/home/user/project",
-  "label": "optional-manual-label"
+  "cwd": "/home/user/project"
 }
 ```
 
-- 식별 키는 source + hostId + sessionId. turnId는 실제로 제공될 때 사용하며 없는 경우 불확실한 상관관계를 추측하지 않는다.
-- session.started, turn.started, tool.started, tool.finished, approval.requested, approval.resolved, input.requested, input.received, turn.completed, turn.failed, turn.interrupted, session.ended 등을 내부 타입 후보로 정의한다. 공급자가 제공하지 않는 이벤트는 생성하지 않는다.
-- 원문 프롬프트, 모델 응답, 실행 명령, 도구 인자, 환경변수, 인증정보는 수집·저장하지 않는다. 필요하면 수동 라벨을 사용한다.
-- Hook 수집기는 기존 Hook을 덮어쓰지 않고 추가하는 방식으로 설치하며, 백업/제거 방법을 제공한다. 연결 실패 시 짧은 제한 시간 내 종료하며 권한 정책에 영향을 주지 않는다.
-- 설치·제거는 멱등성을 갖춘다. Windows, WSL2에 대해 각각 검증한다. 브리지 필요 시 최소 범위의 연결만 허용하고 인증 없이 LAN에 노출하지 않는다.
+- A session key combines source, hostId and sessionId. hostId distinguishes the native environment and each WSL distribution; it is not a public hostname or an account identifier.
+- Use a provider turn ID when available. Never invent an ambiguous association between observations and turns.
+- Candidate evidence types include session.started, turn.started, tool.started, tool.finished, approval.requested, approval.resolved, input.requested, input.received, turn.completed, turn.failed, turn.interrupted and session.ended. Final mappings and any additional evidence types depend on the spike.
+- A confirmed observation establishes the stated transition according to the verified provider/version contract. A provisional observation is a signal whose effect is not yet established. Unknown means the current state cannot be established. Unsupported evidence must not be manufactured.
+- Allowlist only required metadata. Raw hook payloads may be parsed transiently to extract allowed fields but must never be logged, stored or forwarded. Do not collect prompt or response content, commands, tool arguments, environment variables or credentials. Optional task labels are explicitly user supplied, never derived from transcript content.
 
-## 4. State reducer
+### 3.2 Reducer
 
-- 요청 시작 → RUNNING; 명시적 승인/입력 요청 → 해당 대기 상태; 해결 → 실행 상태가 확인된 경우 RUNNING, 그렇지 않으면 UNKNOWN.
-- 명시적 정상 요청 완료 → COMPLETED; 실패 → ERROR; 중단 → INTERRUPTED; 세션 종료 → ENDED.
-- 세션 시작 후 처리 요청 없음 → IDLE. 이미 완료된 요청의 세션은 다음 요청 시작까지 COMPLETED를 유지할 수 있다.
-- 동일 eventId 중복 수신은 무시한다. 뒤늦은 이벤트로 새 요청 상태를 되돌리지 않는다. 시각 또는 요청 상관관계로 순서를 확정할 수 없다면 불확실성을 표시한다.
-- 수집기 재시작, 이벤트 유실, 장시간 이벤트 부재는 완료나 오류로 단정하지 않는다. 마지막 확인 시각과 관측 불확실성을 표시한다. 신뢰 가능한 heartbeat/liveness가 존재할 때만 적극 활용한다.
-- 도구 1개의 실패가 전체 요청 실패임을 뜻하지 않는다. 부모 세션과 서브에이전트를 중복 집계하지 않는다.
+Keep the model small: one current session record, a status, confidence, last observed time, and only the correlation metadata needed for correct transitions.
 
-## 5. Local API proposal
+| Confirmed evidence | Result |
+| --- | --- |
+| Session established and ready with no active turn | IDLE |
+| Turn is actually in progress | RUNNING |
+| Human approval is actually pending | WAITING_APPROVAL |
+| Human input is actually pending | WAITING_INPUT |
+| Wait resolved and execution confirmed to resume | RUNNING |
+| Turn ended normally | COMPLETED |
+| Turn explicitly failed | ERROR |
+| Turn explicitly interrupted | INTERRUPTED |
+| Session explicitly ended | ENDED |
+
+- A resolution without evidence of the next state yields UNKNOWN. Session registration alone does not establish an active turn or an idle state.
+- Provisional evidence may display a clearly marked candidate state or last-known status with uncertainty. It must not trigger confirmed counts or attention/completion notifications. An ambiguous or contradictory observation invalidates certainty when it could affect the current state; do not preserve an apparently confirmed status after losing the evidence for it.
+- A completed turn is distinct from a closed session, successful implementation, passing tests or deployment. A failed or completed individual tool does not determine the whole turn. Avoid double-counting parent sessions and subagents.
+- Deduplicate retransmitted event IDs. Late events from earlier turns or session lifetimes must not overwrite newer states. Use verified correlation and ordering information; when ordering cannot be established, mark the relevant state uncertain rather than guessing from timestamps alone.
+- Record the time of the last observation and state change separately. Silence alone proves neither completion, failure nor termination. If reliable liveness is unavailable, show observation age and uncertainty; do not fabricate a heartbeat.
+- If collection is interrupted or evidence is lost, mark the affected current state unknown or uncertain. A collector restart clears in-memory state; subsequent valid events can register existing sessions without requiring a new SessionStart.
+- Retain a bounded in-memory record set. Prefer ended and stale records for eviction, and define an explicit cap and stale visibility policy before release. Hide ended sessions by default; allow old observations to be hidden separately from confirmed termination. Expiry/eviction is a display/storage policy, not a state transition. No durable session history in v0.1.
+
+## 4. Single-collector transport
+
+Prefer one Windows-hosted collector bound to loopback (default http://127.0.0.1:8787). Native Windows hooks can send directly; WSL2 hooks should first evaluate a Windows-side helper invoked through WSL interoperability, with the sanitized event passed via stdin rather than shell interpolation or command-line secrets. This is a candidate, not a mandatory implementation.
+
+| Environment | Required investigation |
+| --- | --- |
+| Windows native | Direct loopback ingest and browser access |
+| WSL2 NAT | Verified local path to the same collector, preferably interop |
+| WSL2 mirrored networking | Verified local path to the same collector; direct loopback or interop if appropriate |
+| WSL2 with interop disabled or unavailable | Document limitation or validate an equally safe alternative |
+
+Verify addressing, token access, path handling, quoting, latency and timeout behavior. Report each environment as tested/supported, unsupported or untested. The spike selects the simplest safe transport; do not introduce another listening bridge or multiple collectors as a default workaround. Do not change WSL network mode, firewall rules, interop settings or system permissions, and do not bind to all interfaces. If no safe path exists, report the blocker.
+
+## 5. Non-interference and hook lifecycle — release blocker
+
+Monitoring is observational only. It must not change tool authorization, prompt handling, stop decisions, agent output or continuation behavior.
+
+- Validate the neutral output and exit-code contract for every installed hook type and tested provider version. Do not assume empty stdout, exit code zero or one shared JSON response is neutral for every event. Do not emit extra model context or permission decisions.
+- Set and document a small end-to-end deadline for each hook delivery attempt, including helper startup and network I/O. Target no more than 500 ms of added blocking per event, including on failure; verify on real environments and escalate if infeasible. Use no synchronous retries or unbounded child processes. Drop failed delivery rather than block agent execution.
+- Fail open when the collector is absent, hung, slow, rejects input, or cannot be reached, and when parsing fails or the transport helper is unavailable. Failure must not surface as a provider hook veto, injected context, or changed permission decision.
+- Preserve existing hooks, ordering and unrelated settings. Use uniquely identifiable owned entries; do not replace an entire hook group. Inspect and validate settings before editing, back up the original securely, and use safe writes with change detection. If a conflict or unsupported format is detected, stop rather than overwrite.
+- Installation and removal must be idempotent. Removal deletes only monitor-owned entries, preserves changes made after installation, and does not restore a stale whole-file backup over current settings. Document manual cleanup for partial failures.
+- Validate behavior with and without the monitor installed and with other hooks present. Compare observable agent actions, output/decision behavior and timing, including real collector-down and timeout cases. Do not enable monitoring in an existing working configuration until this is demonstrated.
+
+## 6. Local API and security
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/` | dashboard |
-| GET | `/api/sessions` | current snapshot |
-| GET | `/api/events` | SSE; 초기 snapshot 및 상태 변경 |
-| POST | `/api/ingest` | adapter events (authenticated) |
-| GET | `/healthz` | collector health |
+| GET | / | Dashboard |
+| GET | /api/sessions | Current snapshot |
+| GET | /api/events | SSE snapshot and updates |
+| POST | /api/ingest | Authenticated normalized evidence |
+| GET | /healthz | Minimal collector health |
 
-SSE는 재연결 시 현재 snapshot을 다시 받으며 중복 이벤트로 상태가 오염되지 않아야 한다. 입력 검증, 이벤트 크기 제한, 로컬 수집 토큰, 허용 Host/Origin 검증을 적용한다. 명령 실행·권한 승인 API는 구현하지 않는다. 경로 등 UI 데이터는 HTML로 실행하지 않고 텍스트로 렌더링한다.
+- Bind only to the verified local loopback endpoint. Restrict Host to explicit local host/port values; reject foreign origins on all routes, including read and SSE routes. Allow same-origin browser requests and native local requests without an Origin header where appropriate. Do not enable cross-origin reads or wildcard CORS. Protect metadata from DNS rebinding and cross-site access; use appropriate same-origin response headers. This is a single-trusted-local-user design, not isolation from malicious processes running as that user.
+- Authenticate ingest with a cryptographically random per-installation token passed in an authorization header. Store it outside the repository in a user-private configuration file with restrictive Windows ACLs or Unix permissions as appropriate. Document creation, access from both environments, rotation and revocation. Never include the token in URLs, hook configuration command lines, event bodies, browser UI, or logs. Rotation invalidates the previous token; no login, OAuth or JWT service is needed.
+- Validate event schemas, field lengths and request sizes; bound retained records, deduplication metadata, and pending SSE data. Handle slow/disconnected SSE clients without unbounded buffering. Do not expose sensitive diagnostic details in health responses.
+- SSE connections receive a current snapshot on connection/reconnection, with subsequent updates ordered consistently. Reconnecting must not duplicate notifications for old transitions.
+- Render agent metadata as text, not executable HTML. Do not implement command execution, approval, or control endpoints.
 
-## 6. Suggested layout
+## 7. Dashboard
 
-```text
-agent-monitor/
-  README.md
-  docs/mvp.md
-  package.json
-  src/
-    server.js
-    reducer.js
-    store.js
-    adapters/
-      codex.js
-      claude-code.js
-  public/
-    index.html
-    app.js
-    styles.css
-  scripts/
-    install-hooks.js
-    uninstall-hooks.js
-  test/
-    reducer.test.js
-    server.test.js
-    adapters.test.js
-    fixtures/
-```
+Open the local dashboard in an existing browser. Show Running, Needs attention and Completed counts for confirmed current records only, plus an explicit uncertain/unknown count or indicator. Show actual approval and input waits separately. Display provider, native/WSL environment, project name, optional user label, status, confidence, last observed time and elapsed time where meaningful. Clearly label stale or provisional evidence and prioritize confirmed attention requests. Use labels and icons as well as color.
 
-파일 구조는 제안이며 필요에 따라 단순화한다. 첫 구현 PR에는 `npm start` 및 `npm test` 명령, 설치/제거 절차, 지원 버전, 제한 사항을 문서화한다.
+Provide simple filters and opt-in browser notifications only for newly confirmed attention/completion transitions; suppress historical, provisional and duplicate notifications. Document browser background limitations. Window activation, system tray, always-on-top, persistent history and external integrations are deferred.
 
-## 7. Acceptance criteria
+## 8. Implementation sequence
 
-- [ ] Windows 및 WSL2에서 수집 서버 실행과 브라우저 접근을 확인한다.
-- [ ] Codex CLI와 Claude Code의 실제 테스트 세션에서 공식 이벤트를 수집한다. 지원되는 상태와 미지원 상태를 구분한다.
-- [ ] 동시에 네 개 이상의 세션을 실행해 세션 간 상태 오염이 없는지 확인한다.
-- [ ] 진행 → 명시적 완료 → 다음 요청 진행, 대기 → 재개, 중단 및 종료를 각각 검증한다. 대기 이벤트가 공급자에서 제공되지 않으면 미지원으로 표시한다.
-- [ ] 동일 이벤트 재전송, 순서 역전, 재연결, 모니터 재시작 및 이벤트 유실 시나리오를 검증한다.
-- [ ] 수집 서버를 중단한 상태에서도 본래 에이전트 작업과 기존 Hook이 정상 동작한다.
-- [ ] UI 갱신에 페이지 새로고침이 필요 없으며 정상적인 로컬 환경에서 이벤트 도착부터 상태 갱신까지 1초 이내를 목표로 한다.
-- [ ] 인증 없는 ingest 요청, 잘못된 payload, 과대 payload, 허용되지 않은 Origin/Host를 거부한다.
-- [ ] 원문 대화/명령/토큰이 수집 데이터, 스냅샷, 디버그 로그에 남지 않는다.
-- [ ] 설치/제거 반복 시 기존 설정 보존 및 추가 Hook 중복 방지를 검증한다.
-- [ ] 자동화 테스트 결과 및 실제 OS 검증 결과를 각각 기록한다. 시뮬레이션을 실제 테스트로 보고하지 않는다.
+1. **Feasibility spike:** produce the evidence report and support matrix in section 2. Resolve or explicitly escalate blockers before production implementation.
+2. **Collector and reducer:** Node.js 22+, built-in HTTP and test runner, verified adapters, bounded memory, authenticated local API and SSE.
+3. **Dashboard:** plain HTML/CSS/JavaScript, live updates, confirmed counts and optional browser notifications.
+4. **Release:** safe hook installation/removal, documented supported versions and environments, CI and end-to-end evidence.
 
-## 8. First implementation request
+Prefer a small source layout (server, reducer, adapters, public assets, hook scripts and tests). Do not add React, Electron, Docker, a database or additional services absent a demonstrated need. Provide npm start and npm test when the corresponding implementation exists. Use English for documentation, issues, PRs, commits and UI text.
 
-Implement the smallest useful local monitor, not a general agent orchestration platform. Start by validating official event support with real CLI versions and sanitized fixtures. Implement the normalized reducer and its tests first, then the authenticated local collector, SSE dashboard and hook installation/removal. Keep dependencies minimal. Do not modify external project repositories, grant approvals, launch arbitrary commands or transmit session content. Report unsupported events, cross-OS limitations and actual validation evidence in the first implementation draft PR.
+## 9. Release acceptance criteria
+
+- [ ] Feasibility report records official references, real sanitized fixtures, versioned support matrix, transport results and non-interference evidence; unresolved core-state or transport gaps have an explicit maintainer decision.
+- [ ] At least four real concurrent sessions across both supported providers and Windows/WSL2 are visible in one collector without state contamination.
+- [ ] Supported state transitions match real agent behavior. Stop continuation, automatic permission resolution and rejected prompts cannot generate false confirmed completion, attention or running states; unsupported states are clearly marked.
+- [ ] Duplicate, delayed, reordered and missing evidence, interruption, session end, SSE reconnect and collector restart are tested. Stale records are bounded and expiry does not imply termination.
+- [ ] Hook installation/removal preserves existing behavior and settings, including subsequent user edits and repeated operations. Collector-down, hang, timeout and malformed-event cases pass the non-interference deadline and behavior tests.
+- [ ] No refresh is needed for live updates; target under one second from collector receipt to UI update in normal local operation.
+- [ ] Unauthenticated ingest, invalid/oversized input, disallowed Host and foreign Origin are rejected; cross-origin reads, token rotation, bounded storage and slow SSE clients are covered.
+- [ ] Raw payloads, prompts, responses, commands, tool arguments and credentials are absent from persisted state, event forwarding and logs. Token file protections are verified.
+- [ ] Separate automated, simulated and real CLI/OS results. Document unsupported versions/modes, notification limitations, installation and removal instructions in English before release.
+
+The next PR should be a small feasibility spike, not the complete application. Do not modify unrelated repositories, change agent approval policies, or claim unverified platform support.
