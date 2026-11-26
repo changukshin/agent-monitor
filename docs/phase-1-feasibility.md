@@ -36,7 +36,7 @@ The follow-up separates bounded request framing from header policy, drains the d
 
 ## Build and synthetic smoke tests
 
-Rust stable (minimum declared Rust 1.85) and Cargo are required to build, not to run the resulting executable.
+Rust stable (minimum declared Rust 1.85) and Cargo are required to build, not to run the resulting executable. Alternatively, download the Windows or Ubuntu release-binary artifact from the successful Rust spike CI run for the exact PR head being tested (GitHub Actions > run > Artifacts). Extract it in a disposable workspace; on Linux restore executable permission if needed (chmod +x agent-monitor-spike). Verify the run's commit SHA and platform before executing. CI artifacts are experimental, not a release; Linux runner compatibility with the target WSL distribution must still be checked. The commands below assume locally built binaries; substitute the extracted artifact path when testing prebuilt binaries.
 
     cargo test --all-targets
     cargo build --release
