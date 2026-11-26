@@ -4,7 +4,7 @@
 
 See which coding agents are working, which need your attention, and which have finished their current turn, without switching between terminals. No physical Stream Deck, particular IDE, or project integration is required.
 
-> Status: v0.1 design proposal. No runnable implementation or verified provider support is available yet.
+> Status: Phase 1 feasibility spike. An experimental observation probe is available; provider compatibility and production readiness have not been verified. See the [Phase 1 evidence and trial procedure](docs/phase-1-feasibility.md).
 
 ## MVP
 
