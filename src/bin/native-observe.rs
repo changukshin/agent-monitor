@@ -44,10 +44,24 @@ fn snapshot(provider: &str, rows: &Value, cwd: &Path) -> Result<Value> {
             continue;
         }
         let record = if provider == "claude" {
-            json!({"sessionId":session_id(&row["sessionId"])?,
-                "kind":label(&row["kind"], &["interactive","background"]),
-                "status":label(&row["status"], &["idle","busy","waiting"]),
-                "state":label(&row["state"], &["working","idle","waiting","blocked","completed","failed","stopped"])})
+            let mut record = json!({
+                "sessionId": session_id(&row["sessionId"]).ok(),
+                "kind": label(&row["kind"], &["interactive", "background"]),
+                "status": label(&row["status"], &["idle", "busy", "waiting"]),
+                "state": label(&row["state"], &["working", "idle", "waiting", "blocked", "completed", "done", "failed", "stopped"])
+            });
+            if record["kind"] == "background" {
+                if let Some(id) = row["id"].as_str().filter(|id|
+                    id.len() == 8 && id.bytes().all(|b| b.is_ascii_hexdigit())) {
+                    record["backgroundId"] = json!(id);
+                }
+            }
+            if record["status"] == "waiting" {
+                record["waitingFor"] = json!(label(&row["waitingFor"], &[
+                    "permission prompt", "input needed", "sandbox request", "worker request", "dialog open"
+                ]));
+            }
+            record
         } else {
             let status = &row["status"];
             let flags: Vec<_> = status["activeFlags"]
@@ -125,10 +139,13 @@ fn inspect(
         json!({"id":2,"method":"thread/list","params":{"cwd":cwd,"limit":32,"useStateDbOnly":true}}),
     )?;
     let result = response(&mut reader, 2, &mut remaining)?;
-    if !result["nextCursor"].is_null() {
-        return Err("page_limit");
-    }
-    snapshot(provider, &result["data"], cwd)
+    codex_page(&result, cwd)
+}
+
+fn codex_page(page: &Value, cwd: &Path) -> Result<Value> {
+    let mut sample = snapshot("codex", &page["data"], cwd)?;
+    sample["partial"] = json!(!page["nextCursor"].is_null());
+    Ok(sample)
 }
 
 fn run() -> Result<Value> {
@@ -217,6 +234,39 @@ mod tests {
         let sample = snapshot("claude", &rows, Path::new("/trial")).unwrap();
         assert_eq!(sample["sessions"][0]["state"], "blocked");
         assert_eq!(sample["sessions"][0]["status"], "idle");
+    }
+
+    #[test]
+    fn claude_optional_metadata_is_scoped_and_sanitized() {
+        let reasons = ["permission prompt", "input needed", "sandbox request", "worker request", "dialog open"];
+        for reason in reasons {
+            let rows = json!([
+                {"cwd":"/trial","kind":"interactive","status":"waiting","waitingFor":reason},
+                {"cwd":"/trial","kind":"background","id":"abc01234","state":"done","waitingFor":"private"},
+                {"cwd":"/trial","kind":"background","id":"private","sessionId":"private","status":"waiting","waitingFor":"private"}
+            ]);
+            let sample = snapshot("claude", &rows, Path::new("/trial")).unwrap();
+            let rows = &sample["sessions"];
+            assert_eq!(rows[0]["waitingFor"], reason);
+            assert!(rows[0]["sessionId"].is_null());
+            assert_eq!(rows[1]["backgroundId"], "abc01234");
+            assert_eq!(rows[1]["state"], "done");
+            assert!(rows[1].get("waitingFor").is_none());
+            assert_eq!(rows[2]["waitingFor"], "unknown");
+            assert!(!sample.to_string().contains("private"));
+        }
+    }
+
+    #[test]
+    fn truncated_page_keeps_rows_without_disclosing_cursor() {
+        for (cursor, partial) in [(json!("private"), true), (Value::Null, false)] {
+            let page = json!({"nextCursor":cursor,"data":[{"cwd":"/trial",
+                "id":"aaaaaaaa-1234-1234-abcd-111111111111","status":{"type":"idle"}}]});
+            let sample = codex_page(&page, Path::new("/trial")).unwrap();
+            assert_eq!(sample["partial"], partial);
+            assert_eq!(sample["sessions"].as_array().unwrap().len(), 1);
+            assert!(!sample.to_string().contains("private"));
+        }
     }
 
     #[test]

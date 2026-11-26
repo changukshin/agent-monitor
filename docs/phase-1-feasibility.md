@@ -172,7 +172,7 @@ Build with `cargo build --release --bin native-observe` or use the release artif
     native-observe claude <absolute-claude-executable> <absolute-session-cwd>
     native-observe codex <absolute-native-codex-executable> <absolute-session-cwd>
 
-Supply the provider's cwd spelling. Keep returned UUIDs local. Each invocation emits one scoped JSON snapshot or a static error and nonzero exit. Repeat to reconnect. Only one sample need be outstanding. The client caps input at 1 MiB and applies a five-second budget; process creation and cleanup can add wall time. A paginated Codex result beyond 32 threads is rejected as incomplete.
+Supply the provider's cwd spelling. Keep returned UUIDs local. Each invocation emits one scoped JSON snapshot or a static error and nonzero exit. Repeat to reconnect. Only one sample need be outstanding. The client caps input at 1 MiB and applies a five-second budget; process creation and cleanup can add wall time. Codex returns its first page (up to 32 threads) with partial=true when another page exists. An omitted thread cannot establish exit.
 
 Claude uses `agents --json --all --cwd` and checks cwd again before emitting allowlisted metadata. Codex launches only the existing control socket's stdio proxy, initializes it and requests a scoped metadata-only thread list. It does not request turns/items, start threads, answer requests or start a daemon.
 
@@ -211,3 +211,9 @@ Codex documents async PostToolUse command handlers and synchronous SessionEnd. T
 ### Decision requested
 
 Keep Phase 2 blocked. A narrower Windows Claude inventory could expose busy/idle while keeping human attention and final outcome unknown. Alternatively, investigate an explicitly opt-in Codex owning-server launch integration in a separately approved experiment. Neither scope has maintainer approval here. Ordinary passive Codex access, native WSL providers, request correlation, successful Claude outcomes and the 500 ms hook target remain open.
+
+### Review follow-up: documented fields and observation coverage
+
+The [Claude agent view reference](https://code.claude.com/docs/en/agent-view#read-session-state-from-a-script) documents optional session UUIDs, waiting reasons and the background done state. The adapter now preserves the five documented reasons only while status is waiting. Unknown reasons become unknown. A missing UUID leaves sessionId null; an eight-hex-digit background ID can correlate a background row within the same runtime. Rows without either identity are snapshot-only. A background done value describes provider session state; these trials did not correlate it with a particular successful turn. The new mappings were regression-tested with constructed fixtures. The earlier live trials did not exercise either a waiting reason or done.
+
+The [upstream Codex discussion](https://github.com/openai/codex/issues/62230) distinguishes shared session discovery from live state in the owning App Server. A partial listing and notLoaded both limit what the passive monitor can assert.
