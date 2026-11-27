@@ -4,7 +4,7 @@
 
 See which coding agents are working, which need your attention, and which have finished their current turn, without switching between terminals. No physical Stream Deck, particular IDE, or project integration is required.
 
-> Status: Phase 1 experiments completed. The maintainer approved a reduced Windows-first v0.1 implementation scope; production collector and dashboard are not yet implemented. See the [approved MVP contract](docs/mvp.md), [Phase 1A/1B evidence](docs/phase-1-feasibility.md) and [Phase 1C evidence](docs/phase-1c-managed.md).
+> Status: Phase 1 experiments completed. The maintainer approved a reduced Windows-first v0.1 implementation scope; the Phase 2 Rust collector is available for validation. See the [configuration and native API](docs/collector.md) and [Phase 2 validation results](docs/phase-2-validation.md). The dashboard is pending. See the [approved MVP contract](docs/mvp.md), [Phase 1A/1B evidence](docs/phase-1-feasibility.md) and [Phase 1C evidence](docs/phase-1c-managed.md).
 
 ## MVP — approved scope
 
