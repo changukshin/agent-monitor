@@ -1,4 +1,4 @@
-name: Rust spike CI
+name: Rust CI
 on:
   pull_request:
   push:
@@ -17,9 +17,9 @@ jobs:
       - name: Install Rust stable
         run: rustup update stable
       - name: Test
-        run: cargo +stable test --all-targets
+        run: cargo +stable test --workspace --locked --all-targets
       - name: Release build
-        run: cargo +stable build --release
+        run: cargo +stable build --workspace --locked --release
       - name: Upload release binary
         uses: actions/upload-artifact@v4
         with:
@@ -29,5 +29,7 @@ jobs:
             target/release/agent-monitor-spike.exe
             target/release/native-observe
             target/release/native-observe.exe
+            target/release/agent-monitor-collector
+            target/release/agent-monitor-collector.exe
           if-no-files-found: error
           retention-days: 7
