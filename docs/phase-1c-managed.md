@@ -1,5 +1,7 @@
 # Phase 1C: optional managed observation
 
+> Decision update (2026-11-27): the maintainer approved the reduced Windows-first v0.1 scope and GO for Phase 2, as recorded in [the canonical MVP specification](mvp.md) and #3. The original experiment recommendation and support matrix below are retained as historical evidence; untested capabilities are not promoted by this decision.
+
 **Recommendation for maintainer review: keep Phase 2 NO-GO.** A Windows user can opt into the official Codex TUI connected to a dedicated local App Server. A separate Rust client can then distinguish an active turn, a genuine input wait and a provider-reported terminal turn outcome. The result applies only to the tested owner, client and runtime. Passive launch remains the default. This report proposes a narrower support contract; it does not approve it.
 
 ## Setup and ownership
