@@ -27,5 +27,7 @@ jobs:
           path: |
             target/release/agent-monitor-spike
             target/release/agent-monitor-spike.exe
+            target/release/native-observe
+            target/release/native-observe.exe
           if-no-files-found: error
           retention-days: 7

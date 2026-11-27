@@ -27,6 +27,10 @@ Hook names such as Stop, PermissionRequest, UserPromptSubmit and PostToolUse are
 
 ### 3.1 Normalized evidence
 
+For provider-native snapshots, correlate by provider, runtime/host and provider session ID. The caller supplies host identity and sample time. A Windows observer invoked from WSL still observes Windows. The sample carries provider-reported status, session kind or active flags. A failed query conveys loss of visibility. Absence from the next list does not establish exit. A later status supersedes the earlier status only for the same session.
+
+Confirm an outcome only from evidence tied to that turn. Confirm an attention wait or resolution only when its kind and request can be distinguished. Keep hook receipts provisional. The native listing can operate independently of direct HTTP and the WSL relay. See the [Phase 1B validation and scope decision](phase-1-feasibility.md#phase-1b--provider-native-observation).
+
 The following is an illustrative internal event, not a provider payload or a frozen wire schema:
 
 ```json
@@ -141,3 +145,9 @@ Prefer a small Rust source layout (probe, transport, server, reducer, adapters, 
 - [ ] Separate automated, simulated and real CLI/OS results. Document unsupported versions/modes, notification limitations, installation and removal instructions in English before release.
 
 Phase 1 is a small feasibility spike, not the complete application. Rust replaces the original Node.js experiment; repeat the feasibility measurements on the Rust binary rather than treating the old results as evidence for it. Do not modify unrelated repositories, change agent approval policies, or claim unverified platform support.
+
+## Candidate revision for v0.1
+
+Passive observation would be the default: preserve ordinary launches, use documented provider snapshots and treat hook evidence as supplemental. Declare support per provider, runtime and state only after a live trial establishes the claimed meaning. A missing session UUID permits correlation by a validated background ID within its provider/runtime; an unidentified row has no cross-sample identity.
+
+For a separate Phase 1C experiment, an explicitly selected managed launch could make the owning Codex App Server observable. Approval and execution decisions would remain with the original agent and user. This proposal requires a maintainer scope decision and validation of ownership, non-interference and turn semantics before any managed integration or Phase 2 work.
