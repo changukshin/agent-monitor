@@ -26,8 +26,69 @@ fn local_handshake_ping_and_invalid_frame() {
     });
     let state = Mutex::new(Shared::default());
     let mut received = false;
-    assert!(listen(addr, &dir, &state, |_| panic!("no alerts"), &mut received).is_err());
+    assert!(listen(addr, &dir, &state, &sync_channel(1).0, &mut received).is_err());
     assert!(received);
     server.join().unwrap();
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn stalled_and_failing_delivery_does_not_block_websocket_revisions() {
+    use serde_json::json;
+    use std::sync::mpsc::channel;
+    const SID: &str = "10000000-0000-0000-0000-000000000001";
+    const TURN: &str = "20000000-0000-0000-0000-000000000002";
+    let addr_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = addr_listener.local_addr().unwrap();
+    let dir = std::env::temp_dir().join(format!("dash-delay-{}", addr.port()));
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join("dashboard.token"), "d".repeat(64)).unwrap();
+    let state = Arc::new(Mutex::new(Shared {
+        enabled: true,
+        ..Default::default()
+    }));
+    let (entered, started) = channel();
+    let (release, gate) = channel();
+    let sender = delivery(state.clone(), move |_, current| {
+        entered.send(()).unwrap();
+        gate.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(
+            !current(),
+            "cleared notification became obsolete while Windows was busy"
+        );
+        Some(Diagnostic::Error("settings query", -1))
+    });
+    let client_state = state.clone();
+    let client_dir = dir.clone();
+    let client =
+        thread::spawn(move || listen(addr, &client_dir, &client_state, &sender, &mut false));
+    let mut ws = tungstenite::accept(addr_listener.accept().unwrap().0).unwrap();
+    let send = |ws: &mut tungstenite::WebSocket<TcpStream>, rev, activity| {
+        let time = now();
+        let alerts = if activity == "waiting_input" {
+            vec![json!({"kind":"input_wait","source":0,"session":SID,"turn":TURN})]
+        } else {
+            vec![]
+        };
+        ws.send(Message::text(json!({"schema":1,"runtime":"windows","type":if rev==1{"snapshot"}else{"update"},"revision":rev,"instance":"a".repeat(64),"sampledAtMs":time,"alerts":alerts,"sources":[{"mode":"codex_managed","version":"0.167.0","project":"Test","owner":"owner","sequence":rev,"coverage":"complete","sessions":{(SID):{"activity":activity,"latest_turn":{"kind":"known","value":{"id":TURN,"status":"active"}},"visibility":"present","confidence":"confirmed","observed_ms":time,"changed_ms":time,"sequence":rev}}}]}).to_string())).unwrap();
+    };
+    send(&mut ws, 1, "running");
+    send(&mut ws, 2, "waiting_input");
+    started.recv_timeout(Duration::from_secs(3)).unwrap();
+    send(&mut ws, 3, "running");
+    let wait = |condition: &dyn Fn(&Shared) -> bool| {
+        let limit = Instant::now() + Duration::from_secs(2);
+        while !condition(&state.lock().unwrap()) {
+            assert!(Instant::now() < limit);
+            thread::sleep(Duration::from_millis(5));
+        }
+    };
+    wait(&|s| s.feed.frame.as_ref().is_some_and(|f| f.revision == 3));
+    release.send(()).unwrap();
+    wait(&|s| s.notification == Some(Diagnostic::Error("settings query", -1)));
+    send(&mut ws, 4, "running");
+    wait(&|s| s.feed.frame.as_ref().is_some_and(|f| f.revision == 4));
+    ws.close(None).unwrap();
+    assert!(client.join().unwrap().is_err());
     fs::remove_dir_all(dir).unwrap();
 }

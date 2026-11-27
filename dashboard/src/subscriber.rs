@@ -1,12 +1,15 @@
-use crate::view::{now, Feed, Frame};
+use crate::view::{now, Feed, Frame, Notice};
 use std::{
     fs::File,
     io::Read,
     net::{SocketAddr, TcpStream},
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{
+        mpsc::{sync_channel, SyncSender},
+        Arc, Mutex,
+    },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tungstenite::{
     client::client_with_config, client::IntoClientRequest, protocol::WebSocketConfig, Message,
@@ -15,7 +18,67 @@ use tungstenite::{
 pub struct Shared {
     pub feed: Feed,
     pub enabled: bool,
-    pub notification: Option<bool>,
+    pub notification: Option<Diagnostic>,
+    pub generation: u64,
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Diagnostic {
+    Submitted,
+    Error(&'static str, i32),
+    Setting(i32),
+}
+impl std::fmt::Display for Diagnostic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Submitted => write!(f, "Notification submitted"),
+            Self::Error(stage, hr) => write!(f, "Notification: {stage} (0x{:08X})", *hr as u32),
+            Self::Setting(value) => write!(
+                f,
+                "Notification setting: {} ({value})",
+                match value {
+                    1 => "disabled for application",
+                    2 => "disabled for user",
+                    3 => "disabled by group policy",
+                    4 => "disabled by manifest",
+                    _ => "unknown",
+                }
+            ),
+        }
+    }
+}
+struct Job {
+    notice: Notice,
+    generation: u64,
+    queued: Instant,
+}
+fn delivery(
+    state: Arc<Mutex<Shared>>,
+    sink: impl Fn(&str, &dyn Fn() -> bool) -> Option<Diagnostic> + Send + 'static,
+) -> SyncSender<Job> {
+    let (tx, rx) = sync_channel::<Job>(8);
+    thread::spawn(move || {
+        for job in rx {
+            let current = || {
+                let s = state.lock().unwrap();
+                s.enabled
+                    && job.generation == s.generation
+                    && job.queued.elapsed() < Duration::from_secs(5)
+                    && s.feed
+                        .frame
+                        .as_ref()
+                        .is_some_and(|f| job.notice.current(f, now()))
+            };
+            if current() {
+                if let Some(result) = sink(job.notice.label, &current) {
+                    let mut s = state.lock().unwrap();
+                    if s.enabled && s.generation == job.generation {
+                        s.notification = Some(result);
+                    }
+                }
+            }
+        }
+    });
+    tx
 }
 fn token(dir: &Path) -> Result<String, ()> {
     let mut secret = String::new();
@@ -33,7 +96,7 @@ fn listen(
     addr: SocketAddr,
     dir: &Path,
     state: &Mutex<Shared>,
-    notify: fn(&str) -> bool,
+    queue: &SyncSender<Job>,
     received: &mut bool,
 ) -> Result<(), ()> {
     let mut req = format!("ws://{addr}/v1/sessions")
@@ -56,13 +119,24 @@ fn listen(
         match ws.read().map_err(|_| ())? {
             Message::Text(raw) => {
                 let frame: Frame = serde_json::from_str(&raw).map_err(|_| ())?;
-                let notices = {
-                    let mut s = state.lock().unwrap();
-                    let enabled = s.enabled;
-                    s.feed.accept(frame, now(), enabled)?
-                };
+                let mut s = state.lock().unwrap();
+                let enabled = s.enabled;
+                let reset = frame.kind == "snapshot"
+                    && s.feed.frame.as_ref().is_none_or(|old| {
+                        old.instance != frame.instance || old.revision < frame.revision
+                    });
+                let notices = s.feed.accept(frame, now(), enabled)?;
+                if reset {
+                    s.generation += 1;
+                }
+                for notice in notices {
+                    let _ = queue.try_send(Job {
+                        notice,
+                        generation: s.generation,
+                        queued: Instant::now(),
+                    });
+                }
                 *received = true;
-                deliver(state, notices, notify);
             }
             Message::Ping(_) => ws.flush().map_err(|_| ())?,
             Message::Pong(_) => (),
@@ -70,24 +144,13 @@ fn listen(
         }
     }
 }
-fn deliver(state: &Mutex<Shared>, notices: Vec<&str>, notify: fn(&str) -> bool) {
-    for notice in notices {
-        if !state.lock().unwrap().enabled {
-            break;
-        }
-        let result = notify(notice);
-        state.lock().unwrap().notification = Some(result);
-        if !result {
-            break;
-        }
-    }
-}
 pub fn start(
     port: u16,
     dir: std::path::PathBuf,
     state: Arc<Mutex<Shared>>,
-    notify: fn(&str) -> bool,
+    notify: fn(&str, &dyn Fn() -> bool) -> Option<Diagnostic>,
 ) {
+    let queue = delivery(state.clone(), notify);
     thread::spawn(move || {
         let mut delay = 1;
         loop {
@@ -96,10 +159,14 @@ pub fn start(
                 ([127, 0, 0, 1], port).into(),
                 &dir,
                 &state,
-                notify,
+                &queue,
                 &mut received,
             );
-            state.lock().unwrap().feed.frame = None;
+            {
+                let mut s = state.lock().unwrap();
+                s.feed.frame = None;
+                s.generation += 1;
+            }
             if received {
                 delay = 1
             }
@@ -129,21 +196,6 @@ mod tests {
             );
         }
         std::fs::remove_dir_all(path).unwrap();
-    }
-}
-
-#[cfg(test)]
-mod delivery_tests {
-    use super::*;
-    #[test]
-    fn denied_toast_keeps_subscriber_state_and_disabled_skips_os_call() {
-        let s = Mutex::new(Shared::default());
-        deliver(&s, vec!["Input needed"], |_| panic!("disabled"));
-        s.lock().unwrap().enabled = true;
-        deliver(&s, vec!["Input needed"], |_| false);
-        assert_eq!(s.lock().unwrap().notification, Some(false));
-        deliver(&s, vec!["Turn completed"], |_| true);
-        assert_eq!(s.lock().unwrap().notification, Some(true));
     }
 }
 

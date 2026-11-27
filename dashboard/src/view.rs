@@ -37,6 +37,7 @@ pub struct Session {
     pub confidence: String,
     pub visibility: String,
     pub observed_ms: u64,
+    pub changed_ms: u64,
     pub sequence: u64,
     pub latest_turn: Turn,
 }
@@ -244,12 +245,42 @@ pub fn rows(f: &Frame, time: u64) -> Vec<Row<'_>> {
     out.sort_by_key(|r| (r.status, &r.source.project, r.id));
     out
 }
+pub struct Notice {
+    pub label: &'static str,
+    source: usize,
+    session: String,
+    turn: String,
+    owner: String,
+    changed: u64,
+    status: Status,
+    sampled: u64,
+}
+impl Notice {
+    pub fn current(&self, frame: &Frame, time: u64) -> bool {
+        let Some(s) = frame.sources.get(self.source) else {
+            return false;
+        };
+        let Some(r) = s.sessions.get(&self.session) else {
+            return false;
+        };
+        time.checked_sub(self.sampled).is_some_and(|n| n < 5000)
+            && s.mode == "codex_managed"
+            && s.coverage == "complete"
+            && s.owner.as_ref() == Some(&self.owner)
+            && r.changed_ms == self.changed
+            && r.latest_turn
+                .value
+                .as_ref()
+                .is_some_and(|t| t.id == self.turn)
+            && assess(s, r, time).0 == self.status
+    }
+}
 #[derive(Default)]
 pub struct Feed {
     pub frame: Option<Frame>,
 }
 impl Feed {
-    pub fn accept(&mut self, f: Frame, time: u64, enabled: bool) -> Result<Vec<&'static str>, ()> {
+    pub fn accept(&mut self, f: Frame, time: u64, enabled: bool) -> Result<Vec<Notice>, ()> {
         if !f.valid() {
             return Err(());
         }
@@ -311,7 +342,16 @@ impl Feed {
                     continue;
                 }
                 if seen.insert((k, &a.turn, expected)) {
-                    notices.push(expected)
+                    notices.push(Notice {
+                        label: expected,
+                        source: a.source,
+                        session: a.session.clone(),
+                        turn: a.turn.clone(),
+                        owner: s.owner.clone().unwrap(),
+                        changed: r.changed_ms,
+                        status,
+                        sampled: f.sampled,
+                    })
                 }
             }
         }

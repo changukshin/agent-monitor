@@ -1,5 +1,5 @@
 use crate::{
-    subscriber::{self, Shared},
+    subscriber::{self, Diagnostic, Shared},
     view::{now, rows, Status},
 };
 use std::{
@@ -16,25 +16,42 @@ use windows_sys::Win32::{
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain([0]).collect()
 }
-fn notify(label: &str) -> bool {
+fn notify(label: &str, current: &dyn Fn() -> bool) -> Option<Diagnostic> {
     use windows::{
         core::HSTRING,
         Data::Xml::Dom::XmlDocument,
+        Win32::System::WinRT::{RoInitialize, RoUninitialize, RO_INIT_MULTITHREADED},
         UI::Notifications::{NotificationSetting, ToastNotification, ToastNotificationManager},
     };
-    let send = || -> windows::core::Result<bool> {
+    struct Apartment;
+    impl Drop for Apartment {
+        fn drop(&mut self) {
+            unsafe { RoUninitialize() }
+        }
+    }
+    let stage = |name| move |e: windows::core::Error| Diagnostic::Error(name, e.code().0);
+    let send = || -> Result<Option<Diagnostic>, Diagnostic> {
+        unsafe { RoInitialize(RO_INIT_MULTITHREADED) }.map_err(stage("WinRT initialization"))?;
+        let _apartment = Apartment;
         let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(
             "AgentMonitor.Dashboard",
-        ))?;
-        if notifier.Setting()? != NotificationSetting::Enabled {
-            return Ok(false);
+        ))
+        .map_err(stage("app identity / notifier"))?;
+        let setting = notifier.Setting().map_err(stage("settings query"))?;
+        if setting != NotificationSetting::Enabled {
+            return Err(Diagnostic::Setting(setting.0));
         }
-        let xml = XmlDocument::new()?;
-        xml.LoadXml(&HSTRING::from(format!("<toast><visual><binding template=\"ToastGeneric\"><text>Agent Monitor</text><text>{label}</text></binding></visual></toast>")))?;
-        notifier.Show(&ToastNotification::CreateToastNotification(&xml)?)?;
-        Ok(true)
+        let xml = XmlDocument::new().map_err(stage("XML creation"))?;
+        xml.LoadXml(&HSTRING::from(format!("<toast><visual><binding template=\"ToastGeneric\"><text>Agent Monitor</text><text>{label}</text></binding></visual></toast>"))).map_err(stage("XML load"))?;
+        let toast =
+            ToastNotification::CreateToastNotification(&xml).map_err(stage("toast creation"))?;
+        if !current() {
+            return Ok(None);
+        }
+        notifier.Show(&toast).map_err(stage("submission"))?;
+        Ok(Some(Diagnostic::Submitted))
     };
-    send().unwrap_or(false)
+    send().unwrap_or_else(Some)
 }
 struct Ui {
     state: Arc<Mutex<Shared>>,
@@ -162,11 +179,9 @@ unsafe fn refresh(u: &mut Ui) {
     let footer = format!(
         "Windows   ·   {}{}",
         coverage.join("     |     "),
-        match notification {
-            Some(false) => "     |     Notification unavailable",
-            Some(true) => "     |     Notification submitted",
-            None => "",
-        }
+        notification
+            .map(|d| format!("     |     {d}"))
+            .unwrap_or_default()
     );
     if footer != u.footer {
         SetWindowTextW(u.coverage, wide(&footer).as_ptr());
@@ -250,6 +265,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: usize, l: isize) -> isiz
                     if msg == WM_COMMAND && l as HWND == u.check {
                         let mut s = u.state.lock().unwrap();
                         s.enabled = SendMessageW(u.check, BM_GETCHECK, 0, 0) == 1;
+                        s.generation += 1;
                         s.notification = None;
                     }
                     refresh(u)

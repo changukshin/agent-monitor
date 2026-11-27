@@ -4,7 +4,7 @@ const SID: &str = "10000000-0000-0000-0000-000000000001";
 const TURN: &str = "20000000-0000-0000-0000-000000000002";
 fn source(mode: &str, owner: &str, activity: &str) -> Value {
     json!({"mode":mode,"owner":owner,"project":"Test","version":if mode=="claude_passive"{"2.1.287"}else{"0.167.0"},"coverage":"complete","sequence":1,
-"sessions":{(SID):{"activity":activity,"sequence":1,"confidence":if mode=="codex_passive"{"provisional"}else{"confirmed"},"visibility":"present","observed_ms":900,"latest_turn":{"kind":"known","value":{"id":TURN,"status":if activity=="idle"{"completed"}else{"active"}}}}}})
+"sessions":{(SID):{"activity":activity,"sequence":1,"confidence":if mode=="codex_passive"{"provisional"}else{"confirmed"},"visibility":"present","observed_ms":900,"changed_ms":900,"latest_turn":{"kind":"known","value":{"id":TURN,"status":if activity=="idle"{"completed"}else{"active"}}}}}})
 }
 fn frame(rev: u64, kind: &str, sources: Vec<Value>) -> Frame {
     serde_json::from_value(json!({"schema":1,"runtime":"windows","instance":"a".repeat(64),"revision":rev,"type":kind,"sampledAtMs":1000,"sources":sources,"alerts":[]})).unwrap()
