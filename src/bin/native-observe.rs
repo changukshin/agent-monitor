@@ -126,6 +126,9 @@ fn inspect(
             cwd,
         );
     }
+    if provider == "codex-managed" {
+        return managed_sample(input, output, cwd);
+    }
     let mut reader = BufReader::new(output);
     let mut remaining = LIMIT;
     send(
@@ -134,9 +137,6 @@ fn inspect(
     )?;
     response(&mut reader, 1, &mut remaining)?;
     send(&mut input, json!({"method":"initialized"}))?;
-    if provider == "codex-managed" {
-        return managed_sample(&mut input, &mut reader, &mut remaining, cwd);
-    }
     send(
         &mut input,
         json!({"id":2,"method":"thread/list","params":{"cwd":cwd,"limit":32,"useStateDbOnly":true}}),
@@ -147,14 +147,46 @@ fn inspect(
 
 // Query only threads loaded by the explicitly selected owner. No thread
 // creation, subscription, resume or approval response is part of this client.
-fn managed_sample(pipe: &mut ChildStdin, reader: &mut impl BufRead,
-                  budget: &mut usize, cwd: &Path) -> Result<Value> {
-    let mut request_id = 1u8;
-    let mut query = |method: &str, params: Value| {
+struct ProxyPipe(ChildStdout, ChildStdin);
+
+impl Read for ProxyPipe {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> { self.0.read(buf) }
+}
+
+impl Write for ProxyPipe {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> { self.1.write(buf) }
+    fn flush(&mut self) -> std::io::Result<()> { self.1.flush() }
+}
+
+fn managed_sample(input: ChildStdin, output: ChildStdout, cwd: &Path) -> Result<Value> {
+    use tungstenite::{client::client_with_config, protocol::WebSocketConfig, Message};
+    let config = WebSocketConfig::default().max_message_size(Some(LIMIT)).max_frame_size(Some(LIMIT));
+    // The HTTP upgrade runs inside the proxy pipe, not over local TCP.
+    let (mut socket, _) = client_with_config("ws://localhost/", ProxyPipe(output, input), Some(config))
+        .map_err(|_| "owner_unavailable")?;
+    let mut request_id = 0u8;
+    let mut budget = LIMIT;
+    let mut query = |method: &str, params: Value| -> Result<Value> {
         request_id += 1;
-        send(pipe, json!({"id":request_id,"method":method,"params":params}))?;
-        response(reader, request_id, budget)
+        socket.send(Message::text(json!({"id":request_id,"method":method,"params":params}).to_string()))
+            .map_err(|_| "owner_unavailable")?;
+        loop {
+            let msg = socket.read().map_err(|_| "owner_unavailable")?;
+            budget = budget.checked_sub(msg.len()).ok_or("output_limit")?;
+            match msg {
+                Message::Text(text) => {
+                    let reply: Value = serde_json::from_str(&text).map_err(|_| "invalid_json")?;
+                    if reply.get("method").is_none() && reply["id"] == request_id {
+                        return reply.get("result").cloned().ok_or("rpc_error");
+                    }
+                }
+                Message::Close(_) => return Err("owner_unavailable"),
+                _ => continue,
+            }
+        }
     };
+    query("initialize", json!({"clientInfo":{"name":"observation-spike","version":"0.1"},
+        "capabilities":{"experimentalApi":true}}))?;
     let page = query("thread/loaded/list", json!({"limit":8}))?;
     let threads = page["data"].as_array().ok_or("invalid_list")?;
     if threads.len() > 8 { return Err("invalid_list"); }
