@@ -134,12 +134,55 @@ fn inspect(
     )?;
     response(&mut reader, 1, &mut remaining)?;
     send(&mut input, json!({"method":"initialized"}))?;
+    if provider == "codex-managed" {
+        return managed_sample(&mut input, &mut reader, &mut remaining, cwd);
+    }
     send(
         &mut input,
         json!({"id":2,"method":"thread/list","params":{"cwd":cwd,"limit":32,"useStateDbOnly":true}}),
     )?;
     let result = response(&mut reader, 2, &mut remaining)?;
     codex_page(&result, cwd)
+}
+
+// Query only threads loaded by the explicitly selected owner. No thread
+// creation, subscription, resume or approval response is part of this client.
+fn managed_sample(pipe: &mut ChildStdin, reader: &mut impl BufRead,
+                  budget: &mut usize, cwd: &Path) -> Result<Value> {
+    let mut request_id = 1u8;
+    let mut query = |method: &str, params: Value| {
+        request_id += 1;
+        send(pipe, json!({"id":request_id,"method":method,"params":params}))?;
+        response(reader, request_id, budget)
+    };
+    let page = query("thread/loaded/list", json!({"limit":8}))?;
+    let threads = page["data"].as_array().ok_or("invalid_list")?;
+    if threads.len() > 8 { return Err("invalid_list"); }
+    let mut sessions = Vec::new();
+    for thread in threads {
+        let id = session_id(thread)?;
+        let result = query("thread/read", json!({"threadId":id,"includeTurns":false}))?;
+        if result["thread"]["id"] != id { return Err("identity_mismatch"); }
+        let sample = snapshot("codex", &json!([result["thread"]]), cwd)?;
+        if let Some(mut record) = sample["sessions"][0].as_object().cloned() {
+            let turns = query("thread/turns/list", json!({"threadId":id,"limit":1,
+                "sortDirection":"desc","itemsView":"notLoaded"}))?;
+            record.insert("latestTurn".into(), latest_turn(&turns)?);
+            sessions.push(record);
+        }
+    }
+    Ok(json!({"provider":"codex","mode":"managed","sessions":sessions,
+              "partial":!page["nextCursor"].is_null()}))
+}
+
+fn latest_turn(response: &Value) -> Result<Value> {
+    let rows = response["data"].as_array().ok_or("invalid_list")?;
+    match rows.as_slice() {
+        [] => Ok(Value::Null),
+        [turn] => Ok(json!({"id":session_id(&turn["id"])?,
+            "status":label(&turn["status"], &["inProgress","completed","interrupted","failed"])})),
+        _ => Err("invalid_list"),
+    }
 }
 
 fn codex_page(page: &Value, cwd: &Path) -> Result<Value> {
@@ -150,8 +193,11 @@ fn codex_page(page: &Value, cwd: &Path) -> Result<Value> {
 
 fn run() -> Result<Value> {
     let args: Vec<_> = env::args().skip(1).collect();
-    let [provider, binary, directory] = args.as_slice() else {
-        return Err("usage");
+    let (provider, binary, directory, socket) = match args.as_slice() {
+        [provider, binary, directory] => (provider, binary, directory, None),
+        [provider, binary, directory, socket] if provider == "codex-managed" && Path::new(socket).is_absolute() =>
+            (provider, binary, directory, Some(socket)),
+        _ => return Err("usage"),
     };
     if !Path::new(binary).is_absolute() || !Path::new(directory).is_absolute() {
         return Err("absolute_path_required");
@@ -159,6 +205,7 @@ fn run() -> Result<Value> {
     let args: Vec<&str> = match provider.as_str() {
         "claude" => vec!["agents", "--json", "--all", "--cwd", directory],
         "codex" => vec!["app-server", "proxy"],
+        "codex-managed" => vec!["app-server","proxy","--sock",socket.ok_or("explicit_socket_required")?],
         _ => return Err("usage"),
     };
     let listing = provider == "claude";
@@ -267,6 +314,17 @@ mod tests {
             assert_eq!(sample["sessions"].as_array().unwrap().len(), 1);
             assert!(!sample.to_string().contains("private"));
         }
+    }
+
+    #[test]
+    fn turn_metadata_drops_content_and_requires_valid_identity() {
+        let id = "aaaaaaaa-1234-1234-abcd-111111111111";
+        assert_eq!(latest_turn(&json!({"data":[]})).unwrap(), Value::Null);
+        for status in ["completed", "interrupted", "failed", "inProgress"] {
+            let result = latest_turn(&json!({"data":[{"id":id,"status":status,"items":["private"]}]})).unwrap();
+            assert_eq!(result, json!({"id":id,"status":status}));
+        }
+        assert!(latest_turn(&json!({"data":[{"id":"private"}]})).is_err());
     }
 
     #[test]
