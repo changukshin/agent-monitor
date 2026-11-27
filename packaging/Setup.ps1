@@ -51,9 +51,18 @@ function Publish-File($temp,$dest) {
         [IO.File]::Delete($backup)
     } else { [IO.File]::Move($temp,$dest) }
 }
+# Elevated Windows build accounts can default new files to Administrators.
+# Assign the operator SID only on a freshly created payload before publication.
+function Set-NewFileOwner($path) {
+    $acl=Get-Acl -LiteralPath $path
+    $acl.SetOwner($sid)
+    Set-Acl -LiteralPath $path -AclObject $acl
+    Assert-Private $path
+}
 function Save-Receipt($state) {
     $temp=Join-Path $root ([guid]::NewGuid().ToString()+'.tmp')
     [IO.File]::WriteAllText($temp,($state|ConvertTo-Json -Depth 5))
+    Set-NewFileOwner $temp
     Publish-File $temp $receipt
 }
 $mutex=New-Object Threading.Mutex($false,('Local\AgentMonitorSetup-'+$sid.Value))
@@ -101,6 +110,7 @@ try {
         $example.private_directory=$api
         $temp=Join-Path $root ([guid]::NewGuid().ToString()+'.tmp')
         [IO.File]::WriteAllText($temp,($example|ConvertTo-Json -Depth 6))
+        Set-NewFileOwner $temp
         [IO.File]::Move($temp,$config)
     }
     Assert-Private $config
