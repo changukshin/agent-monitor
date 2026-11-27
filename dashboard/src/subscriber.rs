@@ -24,6 +24,7 @@ pub struct Shared {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Diagnostic {
     Submitted,
+    SubmittedBeforeSettings,
     Error(&'static str, i32),
     Setting(i32),
 }
@@ -31,6 +32,9 @@ impl std::fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Submitted => write!(f, "Notification submitted"),
+            Self::SubmittedBeforeSettings => {
+                write!(f, "Notification submitted (initial settings 0x80070490)")
+            }
             Self::Error(stage, hr) => write!(f, "Notification: {stage} (0x{:08X})", *hr as u32),
             Self::Setting(value) => write!(
                 f,
@@ -44,6 +48,15 @@ impl std::fmt::Display for Diagnostic {
                 }
             ),
         }
+    }
+}
+// Windows creates the per-app settings record on the first ordinary Show.
+pub fn notification_settings(result: Result<i32, i32>) -> Result<Diagnostic, Diagnostic> {
+    match result {
+        Ok(0) => Ok(Diagnostic::Submitted),
+        Err(hr) if hr == 0x80070490u32 as i32 => Ok(Diagnostic::SubmittedBeforeSettings),
+        Ok(value) => Err(Diagnostic::Setting(value)),
+        Err(hr) => Err(Diagnostic::Error("settings query", hr)),
     }
 }
 struct Job {
@@ -201,3 +214,26 @@ mod tests {
 
 #[cfg(test)]
 mod wire_tests;
+
+#[cfg(test)]
+mod settings_tests {
+    use super::*;
+    #[test]
+    fn only_absent_settings_allow_first_native_submission() {
+        assert_eq!(notification_settings(Ok(0)), Ok(Diagnostic::Submitted));
+        assert_eq!(
+            notification_settings(Err(0x80070490u32 as i32)),
+            Ok(Diagnostic::SubmittedBeforeSettings)
+        );
+        for denied in 1..=4 {
+            assert_eq!(
+                notification_settings(Ok(denied)),
+                Err(Diagnostic::Setting(denied))
+            );
+        }
+        assert_eq!(
+            notification_settings(Err(-1)),
+            Err(Diagnostic::Error("settings query", -1))
+        );
+    }
+}
