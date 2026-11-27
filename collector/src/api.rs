@@ -220,3 +220,6 @@ mod tests {
         assert!(!authorize(&r, addr, "k"));
     }
 }
+
+#[cfg(test)]
+mod subscription_tests;

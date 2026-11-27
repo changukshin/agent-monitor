@@ -248,7 +248,7 @@ fn codex(input: ChildStdin, out: ChildStdout, cfg: &ConfigSource, owner: String)
     };
     let mut sample = Sample {
         owner,
-        partial: !page["nextCursor"].is_null(),
+        partial: page.get("nextCursor") != Some(&Value::Null),
         unidentified: 0,
         rows: vec![],
     };
@@ -258,6 +258,10 @@ fn codex(input: ChildStdin, out: ChildStdout, cfg: &ConfigSource, owner: String)
     }
     let mut seen = HashSet::new();
     for v in entries {
+        if !managed && v["cwd"].as_str().is_none() {
+            sample.partial = true;
+            continue;
+        }
         let id = uuid(if managed { v } else { &v["id"] })?;
         if !seen.insert(id) {
             return Err("duplicate_id");
@@ -272,6 +276,10 @@ fn codex(input: ChildStdin, out: ChildStdout, cfg: &ConfigSource, owner: String)
             continue;
         }
         let t = c.thread(id)?;
+        if t["ephemeral"].as_bool().is_none() || t["cwd"].as_str().is_none() {
+            sample.partial = true;
+            continue;
+        }
         if t["ephemeral"] != false || t["cwd"].as_str().map(Path::new) != Some(cfg.cwd.as_path()) {
             continue;
         }
@@ -280,8 +288,13 @@ fn codex(input: ChildStdin, out: ChildStdout, cfg: &ConfigSource, owner: String)
             activity: activity(&t),
             turn: c.turn(id)?,
         };
+        let recheck = c.thread(id)?;
+        if recheck["ephemeral"] != false || recheck["cwd"] != t["cwd"] {
+            sample.partial = true;
+            continue;
+        }
         let b = Reading {
-            activity: activity(&c.thread(id)?),
+            activity: activity(&recheck),
             turn: c.turn(id)?,
         };
         sample.rows.push(Row {
@@ -350,6 +363,10 @@ pub fn poll(cfg: &ConfigSource, stop: Arc<AtomicBool>) -> Poll {
         };
         let mut ids = HashSet::new();
         for v in list.as_array().ok_or("invalid_list")? {
+            if v["cwd"].as_str().is_none() {
+                sample.partial = true;
+                continue;
+            }
             if v["cwd"].as_str().map(Path::new) != Some(cfg.cwd.as_path()) {
                 continue;
             }
@@ -386,4 +403,30 @@ pub fn poll(cfg: &ConfigSource, stop: Arc<AtomicBool>) -> Poll {
         Ok((version, Ok(sample)))
     })();
     result.unwrap_or_else(|e| (None, Err(e)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn only_explicit_single_wait_or_empty_flags_have_supported_active_semantics() {
+        for (flags, want) in [
+            (Value::Null, Activity::Unknown),
+            (json!([]), Activity::Active),
+            (json!(["waitingOnUserInput"]), Activity::Input),
+            (
+                json!(["waitingOnUserInput", "waitingOnApproval"]),
+                Activity::Unsupported,
+            ),
+        ] {
+            assert_eq!(
+                activity(&json!({"status":{"type":"active","activeFlags":flags}})),
+                want
+            );
+        }
+        assert_eq!(
+            activity(&json!({"type":"Stop","tool_result":"failed"})),
+            Activity::Unknown
+        );
+    }
 }

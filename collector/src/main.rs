@@ -112,8 +112,9 @@ fn run() -> Result<()> {
         return Err("invalid_config");
     }
     let mut bytes = vec![];
-    File::open(file)
-        .map_err(|_| "config_unavailable")?
+    let config_file = File::open(file).map_err(|_| "config_unavailable")?;
+    platform::private_file(&config_file)?;
+    config_file
         .take(32769)
         .read_to_end(&mut bytes)
         .map_err(|_| "config_unavailable")?;

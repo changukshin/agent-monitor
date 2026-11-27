@@ -149,7 +149,16 @@ fn reduce(mode: Mode, evidence: &Evidence) -> Facts {
                 _ => S::Unknown,
             };
             // Never expose an old terminal turn as a current outcome on contradictory activity.
-            let turn = if state == S::Unknown && matches!(after.turn, Turn::Known { .. }) {
+            let turn = if matches!(state, S::Unknown | S::Unsupported)
+                && matches!(
+                    after.turn,
+                    Turn::Known {
+                        status: TurnStatus::Completed
+                            | TurnStatus::Interrupted
+                            | TurnStatus::Active,
+                        ..
+                    }
+                ) {
                 Turn::Unavailable
             } else {
                 after.turn.clone()
