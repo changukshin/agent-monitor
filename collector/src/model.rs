@@ -172,6 +172,7 @@ fn reduce(mode: Mode, evidence: &Evidence) -> Facts {
 
 #[derive(Debug, Serialize)]
 pub struct Session {
+    pub visibility: &'static str,
     #[serde(flatten)]
     pub facts: Facts,
     pub observed_ms: u64,
@@ -260,7 +261,7 @@ impl Store {
                 src.coverage = error.err().unwrap_or("unsupported_version");
                 src.unidentified = 0;
                 for row in src.sessions.values_mut() {
-                    invalidate(row, wall);
+                    invalidate(row, wall, "offline");
                 }
                 return;
             }
@@ -290,6 +291,7 @@ impl Store {
                 .sessions
                 .entry(input.id.clone())
                 .or_insert_with(|| Session {
+                    visibility: "present",
                     facts: Facts::unknown(),
                     sequence: 0,
                     observed_ms: wall,
@@ -299,6 +301,13 @@ impl Store {
                     last_turn: None,
                 });
             let mut facts = reduce(src.mode, &input.evidence);
+            if (facts.latest_turn == Turn::Empty && row.last_turn.is_some())
+                || (sample.partial
+                    && row.facts.activity == State::WaitingInput
+                    && facts.activity == State::Running)
+            {
+                facts = Facts::unknown();
+            }
             if let Turn::Known { id, status } = &facts.latest_turn {
                 let rollback = row.retired.contains(id)
                     || row.last_turn.as_ref().is_some_and(|(old, s)| {
@@ -356,6 +365,7 @@ impl Store {
             if facts != row.facts {
                 row.changed_ms = wall;
             }
+            row.visibility = "present";
             row.facts = facts;
             row.seen_at = mono;
             row.observed_ms = wall;
@@ -363,7 +373,7 @@ impl Store {
         }
         for (id, row) in &mut src.sessions {
             if !present.contains(id) {
-                invalidate(row, wall);
+                invalidate(row, wall, "missing");
             }
         }
         if src.coverage != "complete" {
@@ -379,8 +389,8 @@ impl Store {
                     changed = true;
                     return false;
                 }
-                if age >= STALE_MS && row.facts != Facts::unknown() {
-                    invalidate(row, wall);
+                if age >= STALE_MS && row.visibility != "stale" {
+                    invalidate(row, wall, "stale");
                     changed = true;
                 }
                 true
@@ -391,9 +401,13 @@ impl Store {
         }
     }
 }
-fn invalidate(row: &mut Session, wall: u64) {
+fn invalidate(row: &mut Session, wall: u64, reason: &'static str) {
+    row.visibility = reason;
     if row.facts != Facts::unknown() {
         row.changed_ms = wall;
         row.facts = Facts::unknown();
     }
 }
+
+#[cfg(test)]
+mod tests;
