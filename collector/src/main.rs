@@ -70,8 +70,6 @@ impl Config {
         for s in &self.sources {
             if !s.binary.is_absolute()
                 || !s.cwd.is_absolute()
-                || !s.cwd.is_dir()
-                || !s.binary.is_file()
                 || s.project.is_empty()
                 || s.project.len() > 64
                 || s.project.chars().any(char::is_control)

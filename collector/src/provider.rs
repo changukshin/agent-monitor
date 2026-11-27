@@ -145,6 +145,21 @@ struct Client {
     id: u32,
     left: usize,
 }
+// Only a well-formed rejection of this request can be isolated to its row.
+fn reply(v: Value, id: u32) -> Result<Value> {
+    if v["id"] != id {
+        return Err("unexpected_response");
+    }
+    match (v.get("result"), v.get("error")) {
+        (Some(result), None) => Ok(result.clone()),
+        (None, Some(e)) if e["message"].is_string() => match e["code"].as_i64() {
+            Some(-32600 | -32602) => Err("request_rejected"),
+            Some(_) => Err("rpc_error"),
+            None => Err("invalid_response"),
+        },
+        _ => Err("invalid_response"),
+    }
+}
 impl Client {
     fn query(&mut self, method: &'static str, params: Value) -> Result<Value> {
         self.id += 1;
@@ -162,8 +177,8 @@ impl Client {
             match msg {
                 Message::Text(s) => {
                     let v: Value = serde_json::from_str(&s).map_err(|_| "invalid_json")?;
-                    if v.get("method").is_none() && v["id"] == self.id {
-                        return v.get("result").cloned().ok_or("rpc_error");
+                    if v.get("method").is_none() {
+                        return reply(v, self.id);
                     }
                 }
                 Message::Close(_) => return Err("unavailable"),
@@ -184,7 +199,7 @@ impl Client {
             "thread/turns/list",
             json!({"threadId":id,"limit":1,"sortDirection":"desc","itemsView":"notLoaded"}),
         ) {
-            Err("rpc_error") => return Ok(Turn::Unavailable),
+            Err("request_rejected") => return Ok(Turn::Unavailable),
             r => r?,
         };
         match r["data"].as_array().ok_or("invalid_list")?.as_slice() {
@@ -200,6 +215,22 @@ impl Client {
             }),
             _ => Err("invalid_list"),
         }
+    }
+}
+fn scoped_thread(result: Result<Value>, sample: &mut Sample) -> Result<Option<Value>> {
+    match result {
+        Err("request_rejected") => {
+            sample.partial = true;
+            Ok(None)
+        }
+        other => other.map(Some),
+    }
+}
+fn availability(cfg: &ConfigSource) -> Result<()> {
+    if cfg.binary.is_file() && cfg.cwd.is_dir() {
+        Ok(())
+    } else {
+        Err("unavailable")
     }
 }
 fn activity(t: &Value) -> Activity {
@@ -275,7 +306,9 @@ fn codex(input: ChildStdin, out: ChildStdout, cfg: &ConfigSource, owner: String)
             }
             continue;
         }
-        let t = c.thread(id)?;
+        let Some(t) = scoped_thread(c.thread(id), &mut sample)? else {
+            continue;
+        };
         if t["ephemeral"].as_bool().is_none() || t["cwd"].as_str().is_none() {
             sample.partial = true;
             continue;
@@ -288,7 +321,9 @@ fn codex(input: ChildStdin, out: ChildStdout, cfg: &ConfigSource, owner: String)
             activity: activity(&t),
             turn: c.turn(id)?,
         };
-        let recheck = c.thread(id)?;
+        let Some(recheck) = scoped_thread(c.thread(id), &mut sample)? else {
+            continue;
+        };
         if recheck["ephemeral"] != false || recheck["cwd"] != t["cwd"] {
             sample.partial = true;
             continue;
@@ -297,6 +332,7 @@ fn codex(input: ChildStdin, out: ChildStdout, cfg: &ConfigSource, owner: String)
             activity: activity(&recheck),
             turn: c.turn(id)?,
         };
+        sample.partial |= a.turn == Turn::Unavailable || b.turn == Turn::Unavailable;
         sample.rows.push(Row {
             id: id.into(),
             evidence: Evidence::Managed(a, b),
@@ -310,6 +346,7 @@ pub fn poll(cfg: &ConfigSource, stop: Arc<AtomicBool>) -> Poll {
         if !cfg!(windows) {
             return Ok((None, Err("unsupported_runtime")));
         }
+        availability(cfg)?;
         if cfg.mode != Mode::ClaudePassive {
             let path = cfg.socket.as_ref().ok_or("invalid_config")?;
             let owner = crate::platform::socket(path)?;
@@ -428,5 +465,84 @@ mod tests {
             activity(&json!({"type":"Stop","tool_result":"failed"})),
             Activity::Unknown
         );
+    }
+}
+
+#[cfg(test)]
+mod isolation_tests {
+    use super::*;
+    use crate::Config;
+    #[test]
+    fn available_managed_source_survives_missing_claude_and_claude_recovers() {
+        let root = std::env::temp_dir().join(crate::api::random_key().unwrap());
+        std::fs::create_dir(&root).unwrap();
+        let managed = ConfigSource {
+            mode: Mode::CodexManaged,
+            project: "project".into(),
+            binary: std::env::current_exe().unwrap(),
+            cwd: root.clone(),
+            socket: Some(root.join("socket")),
+        };
+        let claude = ConfigSource {
+            mode: Mode::ClaudePassive,
+            binary: root.join("claude"),
+            cwd: root.join("work"),
+            socket: None,
+            ..managed.clone()
+        };
+        let cfg = Config {
+            port: 32941,
+            private_directory: root.clone(),
+            sources: vec![managed, claude],
+        };
+        cfg.validate().unwrap();
+        let check = || cfg.sources.iter().map(availability).collect::<Vec<_>>();
+        assert_eq!(check(), [Ok(()), Err("unavailable")]);
+        std::fs::create_dir(&cfg.sources[1].cwd).unwrap();
+        assert_eq!(check(), [Ok(()), Err("unavailable")]);
+        std::fs::File::create(&cfg.sources[1].binary).unwrap();
+        assert_eq!(check(), [Ok(()), Ok(())]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn isolated_rejection_keeps_siblings_but_invalid_replies_abort() {
+        let mut sample = Sample {
+            owner: "owner".into(),
+            partial: false,
+            unidentified: 0,
+            rows: vec![],
+        };
+        for (id, response) in [
+            (1, json!({"id":1,"result":"first"})),
+            (
+                2,
+                json!({"id":2,"error":{"code":-32602,"message":"thread unavailable"}}),
+            ),
+            (3, json!({"id":3,"result":"third"})),
+        ] {
+            if let Some(v) = scoped_thread(reply(response, id), &mut sample).unwrap() {
+                sample.rows.push(Row {
+                    id: v.as_str().unwrap().into(),
+                    evidence: Evidence::Discovery,
+                });
+            }
+        }
+        assert!(sample.partial);
+        assert_eq!(
+            sample
+                .rows
+                .iter()
+                .map(|r| r.id.as_str())
+                .collect::<Vec<_>>(),
+            ["first", "third"]
+        );
+        for bad in [
+            json!({"id":9,"result":{}}),
+            json!({"id":1}),
+            json!({"id":1,"result":{},"error":{}}),
+            json!({"id":1,"error":{"code":-32603,"message":"internal"}}),
+        ] {
+            assert!(scoped_thread(reply(bad, 1), &mut sample).is_err());
+        }
     }
 }

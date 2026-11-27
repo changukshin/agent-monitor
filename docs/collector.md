@@ -44,3 +44,9 @@ At most eight sources poll independently, one in-flight poll per source, with a 
 The native listener admits eight concurrent readers, bounds handshake time to two seconds and write time to 800 ms, and checks for changes every 250 ms. Client data frames close the connection; incoming frames/messages are limited to 1 KiB. Slow or disconnected readers can miss transitions. The API is a sampled current view with no durable history. There is no hook installation, command/approval forwarding, remote control, or agent lifecycle management.
 
 See the [validation record](phase-2-validation.md) for the exact builds and observed behavior.
+
+## Dashboard identity across Codex sources
+
+Within one collector instance, group managed and passive Codex rows for presentation only when their verified owner lifetime and thread UUID both match. Keep per-source sequence, age, confidence and coverage independent. Present fresh confirmed managed facts in preference to provisional discovery. When managed evidence becomes unavailable, display uncertainty or a discovery-only row; passive evidence cannot clear a wait, establish an outcome, or generate an alert. Never group by UUID alone, across owners, or across collector restarts.
+
+Missing source executables and working directories report unavailable and retry independently. A correlated per-thread request rejection marks the managed page partial. Other coherent rows remain usable. Transport, identity and malformed-response failures invalidate the source sample.
