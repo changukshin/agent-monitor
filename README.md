@@ -4,16 +4,17 @@
 
 See which coding agents are working, which need your attention, and which have finished their current turn, without switching between terminals. No physical Stream Deck, particular IDE, or project integration is required.
 
-> Status: Phase 1 feasibility spike. A Rust replacement for the experimental observation probe is under review; build and live provider compatibility must be verified again. See the [Phase 1 evidence and trial procedure](docs/phase-1-feasibility.md).
+> Status: Phase 1 experiments completed. The maintainer approved a reduced Windows-first v0.1 implementation scope; production collector and dashboard are not yet implemented. See the [approved MVP contract](docs/mvp.md), [Phase 1A/1B evidence](docs/phase-1-feasibility.md) and [Phase 1C evidence](docs/phase-1c-managed.md).
 
-## MVP
+## MVP — approved scope
 
-- Observe Codex CLI and Claude Code sessions through verified, supported observation interfaces.
-- Show native Windows and WSL2 sessions in a single local dashboard, subject to the feasibility gate described in [the MVP specification](docs/mvp.md).
-- Display the agent, project, session status, evidence confidence, and last observed time.
-- Highlight confirmed requests for human attention; offer opt-in native desktop notifications for confirmed attention and completion transitions.
-- Install and remove monitoring hooks safely, without changing existing agent behavior.
-- Run without dedicated hardware, a database, an external service, or an account.
+- **Codex managed, Windows, tested with CLI 0.167.0:** observe a dedicated private App Server shared by official Codex TUIs and a read-only Rust observer. Support sampled session/turn identity, active/idle, a single actual input wait and its clearance, completed and interrupted turns. Polling is not guaranteed to capture every transition.
+- **Claude passive, Windows, tested with CLI 2.1.287:** ordinary session inventory and reported busy/idle only. No confirmed completion, input or approval notifications. Other versions remain unverified.
+- **Codex passive:** ordinary launches remain untouched. Optional safe metadata discovery may be shown as limited/provisional; no full live state claim and no required monitor hooks.
+- Display provider, observation mode, project label, status, confidence and observation age. Offer opt-in notifications only for newly observed, confirmed managed Codex input waits and turn completion, subject to production validation.
+- One native Windows dashboard, a local Rust collector, no dedicated hardware, database, browser runtime, remote service or account for the monitor.
+
+Managed mode is opt-in: users explicitly start a dedicated private owner and connect the official TUI using its supported remote mode. No automatic agent launcher, approval proxy or changes to ordinary launches. Approval wait/resolution, terminal failure, process exit, full Claude outcome/attention monitoring, native WSL2 providers and complete transition delivery are deferred. Existing WSL NAT transport tests do not establish native WSL agent support.
 
 ## Status model
 
@@ -46,7 +47,7 @@ flowchart TD
 
 - Rust for all executable components, including the hook probe, relay, collector, tests, and future native desktop dashboard. Use Cargo and a small number of audited dependencies; no Node.js, JavaScript frontend, browser runtime, or Electron requirement.
 - Provider adapters normalize only supported observations; the dashboard does not interpret raw provider payloads.
-- One loopback-only collector. Prefer a Windows-hosted collector with a verified local transport for WSL2; do not change network or firewall settings.
+- One Windows-local collector. Use the approved local observation interfaces; no network or firewall changes. Native WSL provider support is deferred.
 - In-memory session state only for v0.1; no database or durable session history.
 
 ## Non-goals for v0.1
@@ -55,10 +56,10 @@ Agent orchestration, automatic approvals, remote command execution, agent launch
 
 ## Roadmap
 
-1. **Feasibility spike:** establish real provider event semantics, safe hook behavior, and Windows/WSL2 connectivity before implementing the dashboard.
+1. **Feasibility (completed):** Phase 1A transport, Phase 1B passive observation and Phase 1C managed observation established the reduced Windows-first scope.
 2. **Collector:** build the normalized reducer, local API, bounded store, and tests using verified evidence.
 3. **Dashboard:** add live status, attention highlighting, and optional desktop notifications.
-4. **v0.1 release:** safe installation/removal, end-to-end verification, CI, and user documentation.
+4. **v0.1 release:** safe installation/removal, documented manual managed setup, end-to-end verification, CI, and user documentation.
 5. **Later releases:** desktop widgets, window switching, durable history, additional providers, and optional integrations.
 
 ## Design principles
