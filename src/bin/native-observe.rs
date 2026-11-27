@@ -195,11 +195,18 @@ fn managed_sample(input: ChildStdin, output: ChildStdout, cwd: &Path) -> Result<
         let id = session_id(thread)?;
         let result = query("thread/read", json!({"threadId":id,"includeTurns":false}))?;
         if result["thread"]["id"] != id { return Err("identity_mismatch"); }
+        if result["thread"]["ephemeral"] == true { continue; }
         let sample = snapshot("codex", &json!([result["thread"]]), cwd)?;
         if let Some(mut record) = sample["sessions"][0].as_object().cloned() {
             let turns = query("thread/turns/list", json!({"threadId":id,"limit":1,
-                "sortDirection":"desc","itemsView":"notLoaded"}))?;
-            record.insert("latestTurn".into(), latest_turn(&turns)?);
+                "sortDirection":"desc","itemsView":"notLoaded"}));
+            match turns {
+                Ok(page) => { record.insert("latestTurn".into(), latest_turn(&page)?); }
+                // The owner refuses history queries before the first message.
+                // Omit the field on RPC failure; do not invent an empty turn.
+                Err("rpc_error") => {}
+                Err(other) => return Err(other),
+            }
             sessions.push(record);
         }
     }
