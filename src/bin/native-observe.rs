@@ -51,15 +51,24 @@ fn snapshot(provider: &str, rows: &Value, cwd: &Path) -> Result<Value> {
                 "state": label(&row["state"], &["working", "idle", "waiting", "blocked", "completed", "done", "failed", "stopped"])
             });
             if record["kind"] == "background" {
-                if let Some(id) = row["id"].as_str().filter(|id|
-                    id.len() == 8 && id.bytes().all(|b| b.is_ascii_hexdigit())) {
+                if let Some(id) = row["id"]
+                    .as_str()
+                    .filter(|id| id.len() == 8 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+                {
                     record["backgroundId"] = json!(id);
                 }
             }
             if record["status"] == "waiting" {
-                record["waitingFor"] = json!(label(&row["waitingFor"], &[
-                    "permission prompt", "input needed", "sandbox request", "worker request", "dialog open"
-                ]));
+                record["waitingFor"] = json!(label(
+                    &row["waitingFor"],
+                    &[
+                        "permission prompt",
+                        "input needed",
+                        "sandbox request",
+                        "worker request",
+                        "dialog open"
+                    ]
+                ));
             }
             record
         } else {
@@ -150,25 +159,40 @@ fn inspect(
 struct ProxyPipe(ChildStdout, ChildStdin);
 
 impl Read for ProxyPipe {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> { self.0.read(buf) }
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.0.read(buf)
+    }
 }
 
 impl Write for ProxyPipe {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> { self.1.write(buf) }
-    fn flush(&mut self) -> std::io::Result<()> { self.1.flush() }
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.1.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.1.flush()
+    }
 }
 
 fn managed_sample(input: ChildStdin, output: ChildStdout, cwd: &Path) -> Result<Value> {
     use tungstenite::{client::client_with_config, protocol::WebSocketConfig, Message};
-    let config = WebSocketConfig::default().max_message_size(Some(LIMIT)).max_frame_size(Some(LIMIT));
+    let config = WebSocketConfig::default()
+        .max_message_size(Some(LIMIT))
+        .max_frame_size(Some(LIMIT));
     // The HTTP upgrade runs inside the proxy pipe, not over local TCP.
-    let (mut socket, _) = client_with_config("ws://localhost/", ProxyPipe(output, input), Some(config))
-        .map_err(|_| "owner_unavailable")?;
+    let (mut socket, _) =
+        client_with_config("ws://localhost/", ProxyPipe(output, input), Some(config))
+            .map_err(|_| "owner_unavailable")?;
     let mut request_id = 0u8;
     let mut budget = LIMIT;
-    let mut query = |method: &str, params: Value| -> Result<Value> {
+    let mut query = |socket: &mut tungstenite::WebSocket<ProxyPipe>,
+                     method: &str,
+                     params: Value|
+     -> Result<Value> {
         request_id += 1;
-        socket.send(Message::text(json!({"id":request_id,"method":method,"params":params}).to_string()))
+        socket
+            .send(Message::text(
+                json!({"id":request_id,"method":method,"params":params}).to_string(),
+            ))
             .map_err(|_| "owner_unavailable")?;
         loop {
             let msg = socket.read().map_err(|_| "owner_unavailable")?;
@@ -185,23 +209,46 @@ fn managed_sample(input: ChildStdin, output: ChildStdout, cwd: &Path) -> Result<
             }
         }
     };
-    query("initialize", json!({"clientInfo":{"name":"observation-spike","version":"0.1"},
-        "capabilities":{"experimentalApi":true}}))?;
-    let page = query("thread/loaded/list", json!({"limit":8}))?;
+    query(
+        &mut socket,
+        "initialize",
+        json!({"clientInfo":{"name":"observation-spike","version":"0.1"},
+        "capabilities":{"experimentalApi":true}}),
+    )?;
+    socket
+        .send(Message::text(r#"{"method":"initialized"}"#))
+        .map_err(|_| "owner_unavailable")?;
+    let page = query(&mut socket, "thread/loaded/list", json!({"limit":8}))?;
     let threads = page["data"].as_array().ok_or("invalid_list")?;
-    if threads.len() > 8 { return Err("invalid_list"); }
+    if threads.len() > 8 {
+        return Err("invalid_list");
+    }
     let mut sessions = Vec::new();
     for thread in threads {
         let id = session_id(thread)?;
-        let result = query("thread/read", json!({"threadId":id,"includeTurns":false}))?;
-        if result["thread"]["id"] != id { return Err("identity_mismatch"); }
-        if result["thread"]["ephemeral"] == true { continue; }
+        let result = query(
+            &mut socket,
+            "thread/read",
+            json!({"threadId":id,"includeTurns":false}),
+        )?;
+        if result["thread"]["id"] != id {
+            return Err("identity_mismatch");
+        }
+        if result["thread"]["ephemeral"] == true {
+            continue;
+        }
         let sample = snapshot("codex", &json!([result["thread"]]), cwd)?;
         if let Some(mut record) = sample["sessions"][0].as_object().cloned() {
-            let turns = query("thread/turns/list", json!({"threadId":id,"limit":1,
-                "sortDirection":"desc","itemsView":"notLoaded"}));
+            let turns = query(
+                &mut socket,
+                "thread/turns/list",
+                json!({"threadId":id,"limit":1,
+                "sortDirection":"desc","itemsView":"notLoaded"}),
+            );
             match turns {
-                Ok(page) => { record.insert("latestTurn".into(), latest_turn(&page)?); }
+                Ok(page) => {
+                    record.insert("latestTurn".into(), latest_turn(&page)?);
+                }
                 // The owner refuses history queries before the first message.
                 // Omit the field on RPC failure; do not invent an empty turn.
                 Err("rpc_error") => {}
@@ -210,8 +257,10 @@ fn managed_sample(input: ChildStdin, output: ChildStdout, cwd: &Path) -> Result<
             sessions.push(record);
         }
     }
-    Ok(json!({"provider":"codex","mode":"managed","sessions":sessions,
-              "partial":!page["nextCursor"].is_null()}))
+    Ok(
+        json!({"provider":"codex","mode":"managed","sessions":sessions,
+              "partial":!page["nextCursor"].is_null()}),
+    )
 }
 
 fn latest_turn(response: &Value) -> Result<Value> {
@@ -234,8 +283,11 @@ fn run() -> Result<Value> {
     let args: Vec<_> = env::args().skip(1).collect();
     let (provider, binary, directory, socket) = match args.as_slice() {
         [provider, binary, directory] => (provider, binary, directory, None),
-        [provider, binary, directory, socket] if provider == "codex-managed" && Path::new(socket).is_absolute() =>
-            (provider, binary, directory, Some(socket)),
+        [provider, binary, directory, socket]
+            if provider == "codex-managed" && Path::new(socket).is_absolute() =>
+        {
+            (provider, binary, directory, Some(socket))
+        }
         _ => return Err("usage"),
     };
     if !Path::new(binary).is_absolute() || !Path::new(directory).is_absolute() {
@@ -244,7 +296,12 @@ fn run() -> Result<Value> {
     let args: Vec<&str> = match provider.as_str() {
         "claude" => vec!["agents", "--json", "--all", "--cwd", directory],
         "codex" => vec!["app-server", "proxy"],
-        "codex-managed" => vec!["app-server","proxy","--sock",socket.ok_or("explicit_socket_required")?],
+        "codex-managed" => vec![
+            "app-server",
+            "proxy",
+            "--sock",
+            socket.ok_or("explicit_socket_required")?,
+        ],
         _ => return Err("usage"),
     };
     let listing = provider == "claude";
@@ -314,7 +371,10 @@ mod tests {
         let rows = json!([{"cwd":"/trial","id":id,"preview":"private",
             "status":{"type":"active","activeFlags":["waitingOnUserInput","private"]}}]);
         let sample = snapshot("codex", &rows, Path::new("/trial")).unwrap();
-        assert_eq!(sample["sessions"][0]["flags"], json!(["waitingOnUserInput", "unknown"]));
+        assert_eq!(
+            sample["sessions"][0]["flags"],
+            json!(["waitingOnUserInput", "unknown"])
+        );
         assert!(!sample.to_string().contains("private"));
         let rows = json!([{"cwd":"/trial","sessionId":id,"kind":"background","state":"blocked","status":"idle"}]);
         let sample = snapshot("claude", &rows, Path::new("/trial")).unwrap();
@@ -324,7 +384,13 @@ mod tests {
 
     #[test]
     fn claude_optional_metadata_is_scoped_and_sanitized() {
-        let reasons = ["permission prompt", "input needed", "sandbox request", "worker request", "dialog open"];
+        let reasons = [
+            "permission prompt",
+            "input needed",
+            "sandbox request",
+            "worker request",
+            "dialog open",
+        ];
         for reason in reasons {
             let rows = json!([
                 {"cwd":"/trial","kind":"interactive","status":"waiting","waitingFor":reason},
@@ -360,7 +426,9 @@ mod tests {
         let id = "aaaaaaaa-1234-1234-abcd-111111111111";
         assert_eq!(latest_turn(&json!({"data":[]})).unwrap(), Value::Null);
         for status in ["completed", "interrupted", "failed", "inProgress"] {
-            let result = latest_turn(&json!({"data":[{"id":id,"status":status,"items":["private"]}]})).unwrap();
+            let result =
+                latest_turn(&json!({"data":[{"id":id,"status":status,"items":["private"]}]}))
+                    .unwrap();
             assert_eq!(result, json!({"id":id,"status":status}));
         }
         assert!(latest_turn(&json!({"data":[{"id":"private"}]})).is_err());
