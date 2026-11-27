@@ -16,3 +16,7 @@ tungstenite = { version = "0.28", default-features = false, features = ["handsha
 [profile.release]
 strip = true
 lto = "thin"
+
+[workspace]
+members = ["collector"]
+resolver = "2"
