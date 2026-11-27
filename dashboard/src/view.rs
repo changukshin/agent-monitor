@@ -90,6 +90,10 @@ impl Frame {
                     && s.sessions.len() <= 64
                     && s.sessions.iter().all(|(id, r)| {
                         uuid(id)
+                            && matches!(
+                                r.visibility.as_str(),
+                                "present" | "missing" | "offline" | "stale"
+                            )
                             && r.sequence <= s.sequence
                             && matches!(
                                 r.latest_turn.kind.as_str(),

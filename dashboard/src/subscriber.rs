@@ -146,3 +146,6 @@ mod delivery_tests {
         assert_eq!(s.lock().unwrap().notification, Some(true));
     }
 }
+
+#[cfg(test)]
+mod wire_tests;
