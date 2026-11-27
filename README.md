@@ -83,3 +83,5 @@ See [docs/mvp.md](docs/mvp.md) for the feasibility gate, event and transport con
 ## License
 
 Agent Monitor is released under the [MIT License](LICENSE) (SPDX: `MIT`). This license applies to the material published in this repository. Separately distributed future commercial extensions or hosted services may have their own terms.
+
+The [installed Windows candidate validation](docs/phase-4-validation.md) records the tested ZIP, checksums and desktop observations.
