@@ -21,7 +21,7 @@ fn notify(label: &str, current: &dyn Fn() -> bool) -> Option<Diagnostic> {
         core::HSTRING,
         Data::Xml::Dom::XmlDocument,
         Win32::System::WinRT::{RoInitialize, RoUninitialize, RO_INIT_MULTITHREADED},
-        UI::Notifications::{NotificationSetting, ToastNotification, ToastNotificationManager},
+        UI::Notifications::{ToastNotification, ToastNotificationManager},
     };
     struct Apartment;
     impl Drop for Apartment {
@@ -37,10 +37,9 @@ fn notify(label: &str, current: &dyn Fn() -> bool) -> Option<Diagnostic> {
             "AgentMonitor.Dashboard",
         ))
         .map_err(stage("app identity / notifier"))?;
-        let setting = notifier.Setting().map_err(stage("settings query"))?;
-        if setting != NotificationSetting::Enabled {
-            return Err(Diagnostic::Setting(setting.0));
-        }
+        let submitted = subscriber::notification_settings(
+            notifier.Setting().map(|s| s.0).map_err(|e| e.code().0),
+        )?;
         let xml = XmlDocument::new().map_err(stage("XML creation"))?;
         xml.LoadXml(&HSTRING::from(format!("<toast><visual><binding template=\"ToastGeneric\"><text>Agent Monitor</text><text>{label}</text></binding></visual></toast>"))).map_err(stage("XML load"))?;
         let toast =
@@ -49,7 +48,7 @@ fn notify(label: &str, current: &dyn Fn() -> bool) -> Option<Diagnostic> {
             return Ok(None);
         }
         notifier.Show(&toast).map_err(stage("submission"))?;
-        Ok(Some(Diagnostic::Submitted))
+        Ok(Some(submitted))
     };
     send().unwrap_or_else(Some)
 }
