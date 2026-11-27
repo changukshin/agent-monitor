@@ -14,23 +14,29 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust stable
-        run: rustup update stable
-      - name: Test
-        run: cargo +stable test --workspace --locked --all-targets
-      - name: Release build
-        run: cargo +stable build --workspace --locked --release
-      - name: Upload release binary
-        uses: actions/upload-artifact@v4
         with:
-          name: agent-monitor-spike-${{ matrix.os }}
-          path: |
-            target/release/agent-monitor-spike
-            target/release/agent-monitor-spike.exe
-            target/release/native-observe
-            target/release/native-observe.exe
-            target/release/agent-monitor-collector
-            target/release/agent-monitor-collector.exe
-            target/release/agent-monitor-dashboard.exe
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.100.0 --profile minimal
+      - name: Select pinned Rust
+        run: rustup override set 1.100.0
+      - name: Test
+        run: cargo test --workspace --locked --all-targets
+      - name: Release build
+        run: cargo build --workspace --locked --release
+      - name: Assemble Windows distribution
+        if: runner.os == 'Windows'
+        run: python packaging/build.py dist
+      - name: Verify per-user setup and preservation
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          Expand-Archive dist/agent-monitor-0.1.0-windows-x64.zip "$env:RUNNER_TEMP/candidate"
+          ./packaging/test-setup.ps1 -Package "$env:RUNNER_TEMP/candidate"
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: agent-monitor-0.1.0-windows-x64
+          path: dist/*
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30

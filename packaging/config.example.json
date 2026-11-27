@@ -1,0 +1,7 @@
+{
+  "port": 32941,
+  "private_directory": "C:/ReplaceWithPrivateApiDirectory",
+  "sources": [
+    {"mode":"claude_passive","project":"My project","binary":"C:/Tools/claude.exe","cwd":"C:/Projects/Example"}
+  ]
+}

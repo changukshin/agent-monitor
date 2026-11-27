@@ -6,6 +6,10 @@ See which coding agents are working, which need your attention, and which have f
 
 > Status: Phase 1 experiments completed. The maintainer approved a reduced Windows-first v0.1 implementation scope; the Phase 2 Rust collector is available for validation. See the [configuration and native API](docs/collector.md) and [Phase 2 validation results](docs/phase-2-validation.md). The [native Windows dashboard](docs/dashboard.md) subscribes to the collector. See the [approved MVP contract](docs/mvp.md), [Phase 1A/1B evidence](docs/phase-1-feasibility.md) and [Phase 1C evidence](docs/phase-1c-managed.md).
 
+## Windows installation
+
+See the [per-user installation and removal guide](docs/install.md), [candidate release notes](docs/release-notes.md) and [actual dashboard screenshots](docs/phase-3-validation.md).
+
 ## MVP — approved scope
 
 - **Codex managed, Windows, tested with CLI 0.167.0:** observe a dedicated private App Server shared by official Codex TUIs and a read-only Rust observer. Support sampled session/turn identity, active/idle, a single actual input wait and its clearance, completed and interrupted turns. Polling is not guaranteed to capture every transition.
