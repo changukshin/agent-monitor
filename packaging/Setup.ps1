@@ -144,4 +144,7 @@ try {
     Assert-DashboardLink $linkPath $dashboard $root $arguments
     Save-Receipt $state
     Write-Output "Installed and verified. Configuration: $config"
+} catch {
+    Write-Verbose $_.ScriptStackTrace
+    throw ("Setup failed at line {0}: {1}" -f $_.InvocationInfo.ScriptLineNumber,$_.Exception.Message)
 } finally {$mutex.ReleaseMutex();$mutex.Dispose()}

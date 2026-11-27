@@ -27,12 +27,6 @@ jobs:
       - name: Assemble Windows distribution
         if: runner.os == 'Windows'
         run: python packaging/build.py dist
-      - name: Verify per-user setup and preservation
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          Expand-Archive dist/agent-monitor-0.1.0-windows-x64.zip "$env:RUNNER_TEMP/candidate"
-          ./packaging/test-setup.ps1 -Package "$env:RUNNER_TEMP/candidate"
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
@@ -40,3 +34,9 @@ jobs:
           path: dist/*
           if-no-files-found: error
           retention-days: 30
+      - name: Verify per-user setup and preservation
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          Expand-Archive dist/agent-monitor-0.1.0-windows-x64.zip "$env:RUNNER_TEMP/candidate"
+          ./packaging/test-setup.ps1 -Package "$env:RUNNER_TEMP/candidate"
