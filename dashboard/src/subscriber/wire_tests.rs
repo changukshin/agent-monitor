@@ -34,6 +34,13 @@ fn local_handshake_ping_and_invalid_frame() {
 
 #[test]
 fn stalled_and_failing_delivery_does_not_block_websocket_revisions() {
+    check_delivery_isolation(Diagnostic::Error("settings query", 0x80070490u32 as i32));
+}
+#[test]
+fn disabled_os_policy_does_not_block_websocket_revisions() {
+    check_delivery_isolation(Diagnostic::Setting(3));
+}
+fn check_delivery_isolation(result: Diagnostic) {
     use serde_json::json;
     use std::sync::mpsc::channel;
     const SID: &str = "10000000-0000-0000-0000-000000000001";
@@ -56,7 +63,7 @@ fn stalled_and_failing_delivery_does_not_block_websocket_revisions() {
             !current(),
             "cleared notification became obsolete while Windows was busy"
         );
-        Some(Diagnostic::Error("settings query", -1))
+        Some(result)
     });
     let client_state = state.clone();
     let client_dir = dir.clone();
@@ -85,7 +92,7 @@ fn stalled_and_failing_delivery_does_not_block_websocket_revisions() {
     };
     wait(&|s| s.feed.frame.as_ref().is_some_and(|f| f.revision == 3));
     release.send(()).unwrap();
-    wait(&|s| s.notification == Some(Diagnostic::Error("settings query", -1)));
+    wait(&|s| s.notification == Some(result));
     send(&mut ws, 4, "running");
     wait(&|s| s.feed.frame.as_ref().is_some_and(|f| f.revision == 4));
     ws.close(None).unwrap();

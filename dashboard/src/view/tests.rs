@@ -146,3 +146,21 @@ fn grouped_summary_and_attention_filter_share_rows() {
         1
     );
 }
+
+#[test]
+fn queued_wait_expires_and_cannot_survive_clearance_or_a_new_wait() {
+    let mut feed = Feed::default();
+    feed.accept(transition(1, "running"), 1000, true).unwrap();
+    let notice = feed
+        .accept(transition(2, "waiting_input"), 1000, true)
+        .unwrap()
+        .pop()
+        .unwrap();
+    let current = feed.frame.as_ref().unwrap();
+    assert!(notice.current(current, 5999));
+    assert!(!notice.current(current, 6000));
+    assert!(!notice.current(&transition(3, "running"), 1001));
+    let mut later = transition(4, "waiting_input");
+    later.sources[0].sessions.get_mut(SID).unwrap().changed_ms = 1001;
+    assert!(!notice.current(&later, 1001));
+}
