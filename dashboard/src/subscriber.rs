@@ -15,7 +15,7 @@ use tungstenite::{
 pub struct Shared {
     pub feed: Feed,
     pub enabled: bool,
-    pub notification_failed: bool,
+    pub notification: Option<bool>,
 }
 fn token(dir: &Path) -> Result<String, ()> {
     let mut secret = String::new();
@@ -62,19 +62,23 @@ fn listen(
                     s.feed.accept(frame, now(), enabled)?
                 };
                 *received = true;
-                for n in notices {
-                    if !state.lock().unwrap().enabled {
-                        break;
-                    }
-                    if !notify(n) {
-                        state.lock().unwrap().notification_failed = true;
-                        break;
-                    }
-                }
+                deliver(state, notices, notify);
             }
             Message::Ping(_) => ws.flush().map_err(|_| ())?,
             Message::Pong(_) => (),
             _ => return Err(()),
+        }
+    }
+}
+fn deliver(state: &Mutex<Shared>, notices: Vec<&str>, notify: fn(&str) -> bool) {
+    for notice in notices {
+        if !state.lock().unwrap().enabled {
+            break;
+        }
+        let result = notify(notice);
+        state.lock().unwrap().notification = Some(result);
+        if !result {
+            break;
         }
     }
 }
@@ -125,5 +129,20 @@ mod tests {
             );
         }
         std::fs::remove_dir_all(path).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod delivery_tests {
+    use super::*;
+    #[test]
+    fn denied_toast_keeps_subscriber_state_and_disabled_skips_os_call() {
+        let s = Mutex::new(Shared::default());
+        deliver(&s, vec!["Input needed"], |_| panic!("disabled"));
+        s.lock().unwrap().enabled = true;
+        deliver(&s, vec!["Input needed"], |_| false);
+        assert_eq!(s.lock().unwrap().notification, Some(false));
+        deliver(&s, vec!["Turn completed"], |_| true);
+        assert_eq!(s.lock().unwrap().notification, Some(true));
     }
 }

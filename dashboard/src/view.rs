@@ -114,6 +114,23 @@ pub enum Status {
     Unknown,
 }
 impl Status {
+    pub fn count(self, counts: &mut [usize; 4]) {
+        match self {
+            Self::Running => counts[0] += 1,
+            Self::Input => counts[1] += 1,
+            Self::Completed => counts[2] += 1,
+            Self::Unknown => counts[3] += 1,
+            _ => (),
+        }
+    }
+    pub fn matches_filter(self, filter: isize) -> bool {
+        match filter {
+            1 => self == Self::Input,
+            2 => self == Self::Running,
+            3 => self == Self::Unknown,
+            _ => true,
+        }
+    }
     pub fn name(self) -> &'static str {
         match self {
             Self::Input => "Input needed",
@@ -298,3 +315,6 @@ impl Feed {
         Ok(notices)
     }
 }
+
+#[cfg(test)]
+mod tests;

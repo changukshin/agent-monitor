@@ -46,6 +46,8 @@ struct Ui {
     last: Vec<Vec<String>>,
     font: HFONT,
     title_font: HFONT,
+    caption: String,
+    footer: String,
 }
 thread_local! {static UI:RefCell<Option<Ui>>=const{RefCell::new(None)};}
 unsafe fn control(
@@ -112,17 +114,8 @@ unsafe fn refresh(u: &mut Ui) {
             ));
         }
         for row in rows(f, time) {
-            match row.status {
-                Status::Running => counts[0] += 1,
-                Status::Input => counts[1] += 1,
-                Status::Completed => counts[2] += 1,
-                Status::Unknown => counts[3] += 1,
-                _ => (),
-            }
-            if (filter == 1 && row.status != Status::Input)
-                || (filter == 2 && row.status != Status::Running)
-                || (filter == 3 && row.status != Status::Unknown)
-            {
+            row.status.count(&mut counts);
+            if !row.status.matches_filter(filter) {
                 continue;
             }
             let marker = match row.status {
@@ -145,28 +138,40 @@ unsafe fn refresh(u: &mut Ui) {
                 row.confidence.into(),
                 format!("{}s", time.saturating_sub(row.data.observed_ms) / 1000),
                 row.data.visibility.clone(),
+                format!(
+                    "{:02}:{:02}:{:02}",
+                    row.data.observed_ms / 3600000 % 24,
+                    row.data.observed_ms / 60000 % 60,
+                    row.data.observed_ms / 1000 % 60
+                ),
             ]);
         }
     }
     let connected = state.feed.frame.is_some();
-    let failed = state.notification_failed;
+    let notification = state.notification;
     drop(state);
     let caption = if connected {
         format!("Connected     •     {} running       {} input needed       {} completed       {} uncertain",counts[0],counts[1],counts[2],counts[3])
     } else {
         "Disconnected     •     Waiting for a fresh collector snapshot".into()
     };
-    SetWindowTextW(u.summary, wide(&caption).as_ptr());
+    if caption != u.caption {
+        SetWindowTextW(u.summary, wide(&caption).as_ptr());
+        u.caption = caption;
+    }
     let footer = format!(
         "Windows   ·   {}{}",
         coverage.join("     |     "),
-        if failed {
-            "     |     Desktop notifications unavailable"
-        } else {
-            ""
+        match notification {
+            Some(false) => "     |     Notification unavailable",
+            Some(true) => "     |     Notification submitted",
+            None => "",
         }
     );
-    SetWindowTextW(u.coverage, wide(&footer).as_ptr());
+    if footer != u.footer {
+        SetWindowTextW(u.coverage, wide(&footer).as_ptr());
+        u.footer = footer;
+    }
     if data == u.last {
         return;
     }
@@ -179,6 +184,16 @@ unsafe fn refresh(u: &mut Ui) {
             let mut t = wide(cell);
             let mut item: LVITEMW = std::mem::zeroed();
             item.mask = LVIF_TEXT;
+            if j == 0 {
+                item.mask |= LVIF_PARAM;
+                item.lParam = if cell.starts_with("◆") {
+                    1
+                } else if cell.starts_with("▶") {
+                    2
+                } else {
+                    0
+                };
+            }
             item.iItem = i as i32;
             item.iSubItem = j as i32;
             item.pszText = t.as_mut_ptr();
@@ -188,7 +203,7 @@ unsafe fn refresh(u: &mut Ui) {
                 if insert {
                     LVM_INSERTITEMW
                 } else {
-                    LVM_SETITEMTEXTW
+                    LVM_SETITEMW
                 },
                 i,
                 &item as *const _ as isize,
@@ -204,13 +219,38 @@ unsafe fn refresh(u: &mut Ui) {
 }
 unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: usize, l: isize) -> isize {
     match msg {
+        WM_NOTIFY
+            if l != 0
+                && (*(l as *const NMHDR)).code == NM_CUSTOMDRAW
+                && (*(l as *const NMHDR)).idFrom == 3 =>
+        {
+            let draw = &mut *(l as *mut NMLVCUSTOMDRAW);
+            match draw.nmcd.dwDrawStage {
+                CDDS_PREPAINT => CDRF_NOTIFYITEMDRAW as isize,
+                CDDS_ITEMPREPAINT => {
+                    match draw.nmcd.lItemlParam {
+                        1 => {
+                            draw.clrText = 0x00285c82;
+                            draw.clrTextBk = 0x00dbf4ff;
+                        }
+                        2 => {
+                            draw.clrText = 0x00566326;
+                            draw.clrTextBk = 0x00ebf5ec;
+                        }
+                        _ => (),
+                    }
+                    CDRF_DODEFAULT as isize
+                }
+                _ => CDRF_DODEFAULT as isize,
+            }
+        }
         WM_TIMER | WM_COMMAND => {
             UI.with_borrow_mut(|ui| {
                 if let Some(u) = ui {
                     if msg == WM_COMMAND && l as HWND == u.check {
                         let mut s = u.state.lock().unwrap();
                         s.enabled = SendMessageW(u.check, BM_GETCHECK, 0, 0) == 1;
-                        s.notification_failed = false;
+                        s.notification = None;
                     }
                     refresh(u)
                 }
@@ -362,7 +402,8 @@ pub fn run() {
             ("Observation mode", 165),
             ("Confidence", 116),
             ("Age", 58),
-            ("Visibility", 90),
+            ("Visibility", 83),
+            ("Seen (UTC)", 95),
         ]
         .iter()
         .enumerate()
@@ -386,6 +427,8 @@ pub fn run() {
                 check,
                 list,
                 last: vec![],
+                caption: String::new(),
+                footer: String::new(),
                 font: normal,
                 title_font: title,
             })
