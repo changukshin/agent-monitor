@@ -31,5 +31,6 @@ jobs:
             target/release/native-observe.exe
             target/release/agent-monitor-collector
             target/release/agent-monitor-collector.exe
+            target/release/agent-monitor-dashboard.exe
           if-no-files-found: error
           retention-days: 7

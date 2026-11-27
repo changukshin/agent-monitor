@@ -18,5 +18,5 @@ strip = true
 lto = "thin"
 
 [workspace]
-members = ["collector"]
+members = ["collector", "dashboard"]
 resolver = "2"

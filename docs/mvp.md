@@ -80,4 +80,5 @@ Native Rust GUI on Windows; collector remains independent. Show confirmed Runnin
 - [ ] Live updates require no manual refresh; target under one second from collector receipt to UI update (separate from provider sampling interval). Notifications are opt-in, deduplicated and limited to verified transitions.
 - [ ] Local authentication/ACLs, input limits, bounded resources, slow clients, token lifecycle and privacy tests pass. No raw payload or credential leakage.
 - [ ] Locked Windows and Ubuntu CI tests/builds pass on the exact release commit. Verify install/remove/upgrade on supported Windows without Cargo, Node.js or browser runtime. Document the private owner setup and cleanup.
+- [ ] Phase 4: verify visible native Windows banners from the installed dashboard for eligible input waits and completed turns. This release gate requires successful delivery unless the maintainer explicitly approves a scope exclusion. See the [packaging and banner procedure](dashboard.md#phase-4-packaging-and-banner-acceptance).
 - [ ] Maintainer reviews release evidence and approves v0.1.0 before tagging/publishing. Phase 2 GO is not release GO.
